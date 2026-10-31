@@ -37,7 +37,7 @@ export const MessageSchema = new Schema<IMessageDoc>(
     to: { type: String, required: true, enum: ['A', 'B', 'DRONE'] },
     payload: { type: String, required: true, maxlength: 200 },
     type: { type: String, default: 'MSG', enum: ['MSG', 'ACK', 'HEARTBEAT', 'PING', 'STATUS'] },
-    priority: { type: String, default: 'routine', enum: ['routine', 'urgent', 'emergency', 'critical', 'ROUTINE', 'URGENT', 'CRITICAL', 'EMERGENCY'] },
+    priority: { type: String, default: 'routine', enum: ['routine', 'urgent', 'emergency', 'critical', 'ROUTINE', 'URGENT', 'CRITICAL', 'EMERGENCY', 'NORMAL', 'normal'] },
     status: {
       type: String,
       default: 'queued',

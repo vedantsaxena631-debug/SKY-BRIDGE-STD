@@ -128,29 +128,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMode(nextMode);
     setCurrentUser(getAuthUser());
     if (nextMode === 'LIVE') {
-      setMessages([]);
       setDevices(INITIAL_DEVICES.map((d) => ({ ...d, status: 'offline', linkQuality: 0 })));
-      setSerialBridge({
-        connected: false,
-        port: '/dev/ttyUSB0',
-        baudRate: 115200,
-        statusMessage: 'Live mode active. Physical hardware disconnected. An empty live feed is the expected state until hardware connects.',
-        reconnectAttempts: 0,
-        isSimulated: false,
-      });
     } else {
       setMessages(INITIAL_MESSAGES);
       setDevices(INITIAL_DEVICES);
-      setSerialBridge({
-        connected: false,
-        port: '/dev/ttyUSB0',
-        baudRate: 115200,
-        statusMessage: 'Demo simulation bridge active. Telemetry generated in-memory.',
-        reconnectAttempts: 0,
-        isSimulated: true,
-      });
     }
   }, [auth.mode, auth.user?.username]);
+
+  // Live polling for real hardware messages & serial state
+  useEffect(() => {
+    if (mode !== 'LIVE') return;
+
+    const fetchLiveUpdates = async () => {
+      try {
+        const [msgsRes, serialRes] = await Promise.allSettled([
+          api.get('/messages'),
+          api.get('/serial/status'),
+        ]);
+
+        if (msgsRes.status === 'fulfilled' && Array.isArray(msgsRes.value)) {
+          const mappedMsgs: Message[] = msgsRes.value.map((m: any) => ({
+            id: m._id || 'msg_' + m.msgID,
+            msgID: m.msgID,
+            from: m.from === 'A' ? 'TEAM_A' : m.from === 'B' ? 'TEAM_B' : m.from,
+            to: m.to === 'A' ? 'TEAM_A' : m.to === 'B' ? 'TEAM_B' : m.to,
+            payload: m.payload,
+            priority: (m.priority || 'ROUTINE').toUpperCase() as MessagePriority,
+            status: m.status === 'delivered' ? 'ACKNOWLEDGED' : m.status === 'relayed' ? 'RELAYED' : 'QUEUED',
+            timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(),
+            relayCount: m.relayCount || 0,
+            isDemo: false,
+            hops: [
+              {
+                node: m.from === 'A' ? 'TEAM_A' : 'TEAM_B',
+                action: 'LoRa RF Transmission',
+                timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(),
+              },
+            ],
+          }));
+          setMessages(mappedMsgs);
+        }
+
+        if (serialRes.status === 'fulfilled' && serialRes.value) {
+          const s = serialRes.value;
+          setSerialBridge((prev) => ({
+            ...prev,
+            connected: Boolean(s.connected),
+            port: s.port || prev.port,
+            baudRate: s.baudRate || 115200,
+            statusMessage: s.connected
+              ? 'Connected to ESP32 Gateway on ' + s.port + ' @ ' + s.baudRate + ' baud'
+              : 'Serial bridge disconnected',
+            isSimulated: false,
+          }));
+        }
+      } catch (err) {}
+    };
+
+    fetchLiveUpdates();
+    const interval = setInterval(fetchLiveUpdates, 1500);
+    return () => clearInterval(interval);
+  }, [mode]);
 
   // New Design System Modes
   const [kioskMode, setKioskMode] = useState<boolean>(false);
