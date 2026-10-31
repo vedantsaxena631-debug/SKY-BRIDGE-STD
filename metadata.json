@@ -1,0 +1,6 @@
+{
+  "name": "SkyBridge Emergency Communication Network",
+  "description": "Drone-Relay Emergency Communication Network connecting ground teams via LoRa when infrastructure is down.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

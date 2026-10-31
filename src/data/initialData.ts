@@ -1,0 +1,237 @@
+import { DeviceNode, Message, NotificationItem, SystemEvent, User, AuditLogEntry } from '../types';
+
+export const INITIAL_USERS: User[] = [
+  {
+    id: 'usr_admin',
+    username: 'admin',
+    name: 'Cmdr. Sarah Vance',
+    role: 'admin',
+    callsign: 'CONTROL-ACTUAL',
+  },
+  {
+    id: 'usr_op1',
+    username: 'operator',
+    name: 'Lt. Mark Ramirez',
+    role: 'operator',
+    callsign: 'RESCUE-ALPHA',
+  },
+  {
+    id: 'usr_view',
+    username: 'viewer',
+    name: 'Dr. Emily Chen',
+    role: 'viewer',
+    callsign: 'OBSERVER-01',
+  },
+];
+
+export const INITIAL_DEVICES: DeviceNode[] = [
+  {
+    id: 'TEAM_A',
+    name: 'Team A Ground Node',
+    role: 'First Responder Unit Alpha (Forward Base)',
+    type: 'GROUND_NODE',
+    status: 'ONLINE',
+    lastSeen: 'Just now',
+    hardware: {
+      mcu: 'ESP32-WROOM-32 (Dual Core 240MHz)',
+      loraModule: 'SX1278 Ra-02 (433 MHz, SPI)',
+      frequency: '433.0 MHz',
+      antenna: '5dBi High-Gain Omnidirectional Whip',
+      powerSource: '18650 Li-ion 3.7V + TP4056 USB-C Charging Module',
+    },
+    uptimePercent: 99.4,
+    heartbeatsCount: 1420,
+    firmwareVersion: 'v1.2.0-esp32-sx1278-node',
+  },
+  {
+    id: 'DRONE_RELAY',
+    name: 'Drone Airborne Relay Node',
+    role: 'Airborne LoRa Packet Transceiver & Store-Forward Repeater',
+    type: 'AERIAL_RELAY',
+    status: 'ONLINE',
+    lastSeen: 'Just now',
+    hardware: {
+      mcu: 'ESP32-WROOM-32 Payload Microcontroller',
+      loraModule: 'SX1278 Ra-02 Transceiver',
+      frequency: '433.0 MHz',
+      antenna: 'Tuned Dipole 433MHz Ultra-light Antenna',
+      powerSource: '5V UBEC Buck Converter tapped from Drone Main PDB',
+    },
+    uptimePercent: 99.8,
+    heartbeatsCount: 1890,
+    firmwareVersion: 'v1.2.0-esp32-sx1278-relay',
+  },
+  {
+    id: 'TEAM_B',
+    name: 'Team B Ground Node',
+    role: 'Search & Extraction Unit Bravo (Deep Sector)',
+    type: 'GROUND_NODE',
+    status: 'ONLINE',
+    lastSeen: 'Just now',
+    hardware: {
+      mcu: 'ESP32-WROOM-32 (Dual Core 240MHz)',
+      loraModule: 'SX1278 Ra-02 (433 MHz, SPI)',
+      frequency: '433.0 MHz',
+      antenna: '5dBi High-Gain Omnidirectional Whip',
+      powerSource: '18650 Li-ion 3.7V + TP4056 USB-C Charging Module',
+    },
+    uptimePercent: 98.9,
+    heartbeatsCount: 1380,
+    firmwareVersion: 'v1.2.0-esp32-sx1278-node',
+  },
+];
+
+export const PREDEFINED_MESSAGES = [
+  'VICTIM FOUND',
+  'SEND LOCATION',
+  'HELP REQUIRED',
+  'AREA CLEAR',
+  'MESSAGE RECEIVED',
+  'SUPPLIES CRITICAL',
+  'EVAC CORRIDOR OPEN',
+  'COMMENCING SEARCH SECTOR 4',
+];
+
+export const INITIAL_MESSAGES: Message[] = [
+  {
+    id: 'msg_001',
+    msgID: 101,
+    from: 'TEAM_A',
+    to: 'TEAM_B',
+    payload: 'VICTIM FOUND',
+    priority: 'CRITICAL',
+    status: 'ACKNOWLEDGED',
+    timestamp: '10:42:31',
+    relayCount: 1,
+    isDemo: true,
+    ackReceivedAt: '10:42:33',
+    hops: [
+      { node: 'TEAM_A', action: 'Transmitted via LoRa 433MHz', timestamp: '10:42:31' },
+      { node: 'DRONE_RELAY', action: 'Relayed by Drone Airborne Payload', timestamp: '10:42:32' },
+      { node: 'TEAM_B', action: 'Delivered to Ground Display & ACK Returned', timestamp: '10:42:33' },
+    ],
+  },
+  {
+    id: 'msg_002',
+    msgID: 102,
+    from: 'TEAM_B',
+    to: 'TEAM_A',
+    payload: 'SEND LOCATION',
+    priority: 'URGENT',
+    status: 'ACKNOWLEDGED',
+    timestamp: '10:44:10',
+    relayCount: 1,
+    isDemo: true,
+    ackReceivedAt: '10:44:12',
+    hops: [
+      { node: 'TEAM_B', action: 'Transmitted via LoRa 433MHz', timestamp: '10:44:10' },
+      { node: 'DRONE_RELAY', action: 'Relayed by Drone Airborne Payload', timestamp: '10:44:11' },
+      { node: 'TEAM_A', action: 'Delivered & Acknowledged', timestamp: '10:44:12' },
+    ],
+  },
+  {
+    id: 'msg_003',
+    msgID: 103,
+    from: 'TEAM_A',
+    to: 'TEAM_B',
+    payload: 'EVAC CORRIDOR OPEN',
+    priority: 'ROUTINE',
+    status: 'DELIVERED',
+    timestamp: '10:47:05',
+    relayCount: 1,
+    isDemo: true,
+    ackReceivedAt: '10:47:08',
+    hops: [
+      { node: 'TEAM_A', action: 'Transmitted via LoRa 433MHz', timestamp: '10:47:05' },
+      { node: 'DRONE_RELAY', action: 'Relayed by Drone Airborne Payload', timestamp: '10:47:06' },
+      { node: 'TEAM_B', action: 'Delivered to Station', timestamp: '10:47:08' },
+    ],
+  },
+];
+
+export const INITIAL_EVENTS: SystemEvent[] = [
+  {
+    id: 'evt_001',
+    timestamp: '10:42:31',
+    type: 'ALERT',
+    message: 'CRITICAL Alert from TEAM_A: "VICTIM FOUND" dispatched across network',
+    sourceNode: 'TEAM_A',
+    isDemo: true,
+    priority: 'CRITICAL',
+  },
+  {
+    id: 'evt_002',
+    timestamp: '10:42:32',
+    type: 'RELAY',
+    message: 'Drone Relay forwarded msgID 101 from TEAM_A towards TEAM_B',
+    sourceNode: 'DRONE_RELAY',
+    isDemo: true,
+  },
+  {
+    id: 'evt_003',
+    timestamp: '10:42:33',
+    type: 'ACK',
+    message: 'ACK returned from TEAM_B for msgID 101. Delivery confirmed.',
+    sourceNode: 'TEAM_B',
+    isDemo: true,
+  },
+  {
+    id: 'evt_004',
+    timestamp: '10:44:12',
+    type: 'INFO',
+    message: 'Periodic heartbeat sync completed. All 3 nodes confirmed reachable.',
+    isDemo: true,
+  },
+];
+
+export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
+  {
+    id: 'notif_1',
+    title: 'Critical Traffic Relayed',
+    message: 'TEAM A signaled "VICTIM FOUND" - relayed via Drone to TEAM B successfully.',
+    severity: 'critical',
+    timestamp: '10:42:31',
+    read: false,
+    relatedMsgId: 101,
+    isDemo: true,
+  },
+  {
+    id: 'notif_2',
+    title: 'Airborne Relay Link Active',
+    message: 'Drone payload SX1278 reports clear 433MHz carrier frequency.',
+    severity: 'info',
+    timestamp: '10:35:00',
+    read: true,
+    isDemo: true,
+  },
+];
+
+export const INITIAL_AUDIT_LOGS: AuditLogEntry[] = [
+  {
+    id: 'aud_1',
+    timestamp: '10:30:15',
+    actor: 'admin',
+    role: 'admin',
+    action: 'SYSTEM_BOOT',
+    target: 'SkyBridge MERN Gateway',
+    metadata: { nodeCount: 3, serialPort: '/dev/ttyUSB0 (Mock Gateway)' },
+  },
+  {
+    id: 'aud_2',
+    timestamp: '10:32:00',
+    actor: 'admin',
+    role: 'admin',
+    action: 'DEMO_MODE_ENABLE',
+    target: 'Simulation Engine',
+    metadata: { reason: 'Initial system presentation & lab verification' },
+  },
+  {
+    id: 'aud_3',
+    timestamp: '10:42:31',
+    actor: 'operator',
+    role: 'operator',
+    action: 'SEND_MESSAGE',
+    target: 'TEAM_B',
+    metadata: { msgID: 101, payload: 'VICTIM FOUND', priority: 'CRITICAL' },
+  },
+];
