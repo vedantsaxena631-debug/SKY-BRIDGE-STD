@@ -30,6 +30,7 @@
     "jsonwebtoken": "^9.0.3",
     "lenis": "^1.3.26",
     "lucide-react": "^0.546.0",
+    "mongodb-memory-server": "^11.3.0",
     "mongoose": "^9.10.1",
     "motion": "^12.23.24",
     "react": "^19.0.1",
@@ -50,7 +51,6 @@
     "@types/node": "^22.14.0",
     "@types/supertest": "^7.2.1",
     "autoprefixer": "^10.4.21",
-    "mongodb-memory-server": "^11.2.0",
     "supertest": "^7.2.2",
     "tailwindcss": "^4.1.14"
   }
