@@ -94,7 +94,11 @@ async function sendCloudEvent(eventData: Record<string, unknown>): Promise<boole
   }
 }
 
-async function resolvePendingTransmission(msgID: number, event: 'delivered' | 'failed'): Promise<void> {
+async function resolvePendingTransmission(
+  msgID: number,
+  event: 'delivered' | 'failed',
+  failureReason?: string
+): Promise<void> {
   const pending = pendingTransmissions.get(msgID);
   if (!pending) return;
 
@@ -102,7 +106,7 @@ async function resolvePendingTransmission(msgID: number, event: 'delivered' | 'f
   pending.busyRetryTimer = null;
   pending.state = event === 'delivered' ? 'ack_pending' : 'failure_pending';
   pending.lastEventAttemptAt = Date.now();
-  if (await sendCloudEvent({ event, msgID })) {
+  if (await sendCloudEvent({ event, msgID, ...(failureReason ? { failureReason } : {}) })) {
     pendingTransmissions.delete(msgID);
     console.log('[LoRa -> Cloud] Message ' + msgID + ' ' + event + '.');
   }
@@ -114,7 +118,7 @@ async function retryTransmission(msgID: number, reason: string): Promise<void> {
 
   if (pending.attempts >= MAX_RADIO_ATTEMPTS) {
     console.warn('[LoRa] msgID=' + msgID + ' failed after ' + pending.attempts + ' radio attempts (' + reason + ').');
-    await resolvePendingTransmission(msgID, 'failed');
+    await resolvePendingTransmission(msgID, 'failed', reason);
     return;
   }
 
@@ -150,7 +154,7 @@ function retryWhenHostIsBusy(msgID: number): void {
 
   pending.busySince ??= Date.now();
   if (Date.now() - pending.busySince >= HOST_BUSY_MAX_WAIT_MS) {
-    void resolvePendingTransmission(msgID, 'failed');
+    void resolvePendingTransmission(msgID, 'failed', 'Radio host remained busy for 10 seconds.');
     return;
   }
 
@@ -265,7 +269,7 @@ async function handleSerialLine(state: GatewayPort, raw: string): Promise<void> 
       console.warn('[serial ' + state.nodeId + '] host is busy for msgID=' + msgID + '; waiting to retry.');
       retryWhenHostIsBusy(msgID);
     } else if (status === 'HOST_CMD_REJECTED') {
-      await resolvePendingTransmission(msgID, 'failed');
+      await resolvePendingTransmission(msgID, 'failed', status);
     } else if (status === 'FAILED_NO_ACK' || status === 'RADIO_TX_FAILED') {
       await retryTransmission(msgID, status);
     } else if (status === 'RADIO_ACK_TX_FAILED') {

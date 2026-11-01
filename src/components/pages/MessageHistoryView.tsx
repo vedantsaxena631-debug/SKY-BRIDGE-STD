@@ -32,7 +32,10 @@ export const MessageHistoryView: React.FC = () => {
       m.to.toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesPriority = priorityFilter === 'ALL' || m.priority === priorityFilter;
-    const matchesStatus = statusFilter === 'ALL' || m.status === statusFilter;
+    const matchesStatus =
+      statusFilter === 'ALL' ||
+      (statusFilter === 'FAILED' && (m.status === 'FAILED' || m.status === 'FAILED_NO_ACK')) ||
+      m.status === statusFilter;
 
     return matchesSearch && matchesPriority && matchesStatus;
   });
@@ -104,8 +107,9 @@ export const MessageHistoryView: React.FC = () => {
               <option value="ACKNOWLEDGED">Acknowledged</option>
               <option value="DELIVERED">Delivered</option>
               <option value="RELAYED">Relayed</option>
+              <option value="SENT_TO_BRIDGE">Sent to radio</option>
               <option value="QUEUED">Queued</option>
-              <option value="FAILED_NO_ACK">Failed</option>
+              <option value="FAILED">Failed</option>
             </select>
           </div>
         </div>
@@ -171,6 +175,8 @@ export const MessageHistoryView: React.FC = () => {
                             ? 'bg-blue-950 text-blue-300 border border-blue-800'
                             : msg.status === 'RELAYED'
                             ? 'bg-cyan-950 text-cyan-300 border border-cyan-800'
+                            : msg.status === 'FAILED' || msg.status === 'FAILED_NO_ACK'
+                            ? 'bg-rose-950 text-rose-300 border border-rose-800'
                             : 'bg-slate-800 text-slate-300'
                         }`}
                       >
@@ -270,6 +276,13 @@ export const MessageHistoryView: React.FC = () => {
                   <div className="text-emerald-400">{selectedMessage.ackReceivedAt || 'Pending'}</div>
                 </div>
               </div>
+
+              {selectedMessage.failureReason && (
+                <div className="p-3 bg-rose-950/40 rounded-lg border border-rose-900/70 text-rose-200">
+                  <div className="text-[10px] uppercase tracking-wider text-rose-300">Delivery failure</div>
+                  <div className="mt-1">{selectedMessage.failureReason}</div>
+                </div>
+              )}
 
               <div>
                 <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">

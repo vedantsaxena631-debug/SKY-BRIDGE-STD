@@ -274,7 +274,7 @@ router.post('/events', async (req: Request, res: Response) => {
       }
 
       message.status = 'failed';
-      message.failureReason = 'Hardware gateway reported delivery failure.';
+      message.failureReason = typeof req.body?.failureReason === 'string' && req.body.failureReason.trim() ? req.body.failureReason.trim().slice(0, 240) : 'Hardware gateway reported delivery failure.';
       message.claimedBy = undefined;
       message.leaseUntil = null;
       await message.save();

@@ -154,10 +154,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             to: m.to === 'A' ? 'TEAM_A' : m.to === 'B' ? 'TEAM_B' : m.to,
             payload: m.payload,
             priority: (m.priority || 'ROUTINE').toUpperCase() as MessagePriority,
-            status: m.status === 'delivered' ? 'ACKNOWLEDGED' : m.status === 'relayed' ? 'RELAYED' : 'QUEUED',
+            status:
+              m.status === 'delivered' ? 'ACKNOWLEDGED' :
+              m.status === 'relayed' ? 'RELAYED' :
+              m.status === 'sent_to_bridge' ? 'SENT_TO_BRIDGE' :
+              m.status === 'failed' ? 'FAILED' :
+              'QUEUED',
             timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(),
             relayCount: m.relayCount || 0,
             isDemo: false,
+            ackReceivedAt: m.ackReceivedAt ? new Date(m.ackReceivedAt).toLocaleTimeString() : undefined,
+            failureReason: typeof m.failureReason === 'string' ? m.failureReason : undefined,
             hops: [
               {
                 node: m.from === 'A' ? 'TEAM_A' : 'TEAM_B',
