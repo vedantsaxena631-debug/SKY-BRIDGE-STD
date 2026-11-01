@@ -36,6 +36,16 @@ export const SettingsView: React.FC = () => {
 
   const [customPort, setCustomPort] = useState(serialBridge.port);
   const [baudRate, setBaudRate] = useState(serialBridge.baudRate);
+  const serialStatusLabel = serialBridge.connected
+    ? 'SERIAL CONNECTED'
+    : mode === 'DEMO' || serialBridge.isSimulated
+    ? 'DEMO EMULATION'
+    : 'SERIAL OFFLINE';
+  const serialStatusClass = serialBridge.connected
+    ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+    : serialStatusLabel === 'DEMO EMULATION'
+    ? 'bg-purple-950 text-purple-300 border border-purple-800'
+    : 'bg-amber-950 text-amber-300 border border-amber-800';
 
   const handleSerialToggle = () => {
     if (serialBridge.connected) {
@@ -169,13 +179,9 @@ export const SettingsView: React.FC = () => {
             2. USB Serial Gateway Configuration
           </h3>
           <span
-            className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
-              serialBridge.connected
-                ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                : 'bg-purple-950 text-purple-300 border border-purple-800'
-            }`}
+            className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${serialStatusClass}`}
           >
-            {serialBridge.connected ? 'SERIAL CONNECTED' : 'DEMO EMULATION'}
+            {serialStatusLabel}
           </span>
         </div>
 

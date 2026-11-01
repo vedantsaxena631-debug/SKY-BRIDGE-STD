@@ -3,6 +3,20 @@ import { useApp } from '../../context/AppContext';
 import { Radio, AlertCircle, RefreshCw, Zap } from 'lucide-react';
 import { useTopologyAnimation } from '../../hooks/useTopologyAnimation';
 import { colorTokens, motionTokens } from '../../styles/tokens';
+import type { DeviceNode } from '../../types';
+
+const getNodeStatusPresentation = (status?: DeviceNode['status']) => {
+  if (status === 'ONLINE') {
+    return { label: 'ONLINE', textClass: 'text-emerald-500', dotClass: 'bg-emerald-500 animate-pulse' };
+  }
+  if (status === 'STANDBY') {
+    return { label: 'STANDBY', textClass: 'text-amber-400', dotClass: 'bg-amber-400' };
+  }
+  if (status === 'OFFLINE') {
+    return { label: 'OFFLINE', textClass: 'text-rose-400', dotClass: 'bg-rose-400' };
+  }
+  return { label: 'UNKNOWN', textClass: 'text-slate-500', dotClass: 'bg-slate-500' };
+};
 
 export const NetworkTopology: React.FC = () => {
   const { devices, activeTransmission, reducedMotion, mode, theme, sendTestPing, currentUser } = useApp();
@@ -15,6 +29,11 @@ export const NetworkTopology: React.FC = () => {
   const teamA = devices.find((d) => d.id === 'TEAM_A');
   const drone = devices.find((d) => d.id === 'DRONE_RELAY');
   const teamB = devices.find((d) => d.id === 'TEAM_B');
+  const teamAStatus = getNodeStatusPresentation(teamA?.status);
+  const droneStatus = getNodeStatusPresentation(drone?.status);
+  const teamBStatus = getNodeStatusPresentation(teamB?.status);
+  const onlineNodeCount = [teamA, drone, teamB].filter((device) => device?.status === 'ONLINE').length;
+  const allNodesOnline = onlineNodeCount === 3;
 
   const tokens = theme === 'dark' ? colorTokens.dark : colorTokens.light;
   const isLight = theme === 'light';
@@ -77,18 +96,26 @@ export const NetworkTopology: React.FC = () => {
             </div>
           ) : (
             <div
-              className={`flex items-center gap-2 text-xs font-mono ${
-                isLight ? 'text-[#6B7686]' : 'text-[#9AA4B2]'
-              }`}
+              className={`flex items-center gap-2 text-xs font-mono ${allNodesOnline ? 'text-emerald-500' : isLight ? 'text-[#6B7686]' : 'text-[#9AA4B2]'}`}
             >
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>Carrier Standby — 433.000 MHz Clear</span>
+              <span className={`w-2 h-2 rounded-full ${allNodesOnline ? 'bg-emerald-500' : 'bg-slate-500'}`} />
+              <span>
+                {mode === 'DEMO'
+                  ? allNodesOnline
+                    ? 'Carrier Standby — 433.000 MHz Clear (simulated)'
+                    : `${onlineNodeCount} of 3 simulated nodes online`
+                  : allNodesOnline
+                  ? `${onlineNodeCount} of 3 nodes online — carrier quality not reported`
+                  : `${onlineNodeCount} of 3 nodes online — awaiting live telemetry`}
+              </span>
             </div>
           )}
 
           {currentUser.role !== 'viewer' && (
             <button
-              onClick={() => sendTestPing()}
+              onClick={() => {
+                void sendTestPing().catch((error) => console.warn('[NetworkTopology] Test ping failed:', error));
+              }}
               className="px-2.5 py-1 text-xs font-mono font-medium rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 border border-cyan-500/30 transition-colors flex items-center gap-1"
               title="Trigger diagnostic test ping across topology"
             >
@@ -117,7 +144,7 @@ export const NetworkTopology: React.FC = () => {
               </span>
               <p className="text-xs text-slate-500 font-mono">ESP32 + SX1278 (VSPI)</p>
             </div>
-            <span className="text-emerald-500 font-mono text-xs font-bold">STATUS: ONLINE</span>
+            <span className={`${teamAStatus.textClass} font-mono text-xs font-bold`}>STATUS: {teamAStatus.label}</span>
           </div>
 
           <div
@@ -135,7 +162,7 @@ export const NetworkTopology: React.FC = () => {
               </span>
               <p className="text-xs text-slate-500 font-mono">Decoupled Comms Payload</p>
             </div>
-            <span className="text-emerald-500 font-mono text-xs font-bold">STATUS: ACTIVE RELAY</span>
+            <span className={`${droneStatus.textClass} font-mono text-xs font-bold`}>STATUS: {droneStatus.label}</span>
           </div>
 
           <div
@@ -153,7 +180,7 @@ export const NetworkTopology: React.FC = () => {
               </span>
               <p className="text-xs text-slate-500 font-mono">ESP32 + SX1278 (VSPI)</p>
             </div>
-            <span className="text-emerald-500 font-mono text-xs font-bold">STATUS: ONLINE</span>
+            <span className={`${teamBStatus.textClass} font-mono text-xs font-bold`}>STATUS: {teamBStatus.label}</span>
           </div>
         </div>
       ) : (
@@ -292,9 +319,9 @@ export const NetworkTopology: React.FC = () => {
                 >
                   GROUND 01
                 </span>
-                <span className="flex items-center gap-1.5 text-xs font-mono text-emerald-500">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  ONLINE
+                <span className={`flex items-center gap-1.5 text-xs font-mono ${teamAStatus.textClass}`}>
+                  <span className={`w-2 h-2 rounded-full ${teamAStatus.dotClass}`} />
+                  {teamAStatus.label}
                 </span>
               </div>
               <h4
@@ -340,9 +367,9 @@ export const NetworkTopology: React.FC = () => {
                 <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-600 dark:text-cyan-300 border border-cyan-500/30">
                   DRONE RELAY
                 </span>
-                <span className="flex items-center gap-1.5 text-xs font-mono text-emerald-500">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  RELAY READY
+                <span className={`flex items-center gap-1.5 text-xs font-mono ${droneStatus.textClass}`}>
+                  <span className={`w-2 h-2 rounded-full ${droneStatus.dotClass}`} />
+                  {droneStatus.label}
                 </span>
               </div>
               <h4
@@ -394,9 +421,9 @@ export const NetworkTopology: React.FC = () => {
                 >
                   GROUND 02
                 </span>
-                <span className="flex items-center gap-1.5 text-xs font-mono text-emerald-500">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  ONLINE
+                <span className={`flex items-center gap-1.5 text-xs font-mono ${teamBStatus.textClass}`}>
+                  <span className={`w-2 h-2 rounded-full ${teamBStatus.dotClass}`} />
+                  {teamBStatus.label}
                 </span>
               </div>
               <h4

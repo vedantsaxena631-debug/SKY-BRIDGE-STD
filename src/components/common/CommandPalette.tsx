@@ -59,7 +59,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
       desc: 'Dispatches a diagnostic probe packet through the drone relay',
       icon: Zap,
       run: async () => {
-        await sendTestPing();
+        try {
+          await sendTestPing();
+        } catch (error) {
+          console.warn('[CommandPalette] Test ping failed:', error);
+        }
         onClose();
       },
     },

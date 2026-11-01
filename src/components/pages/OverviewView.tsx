@@ -21,6 +21,7 @@ export const OverviewView: React.FC = () => {
   const acknowledgedCount = messages.filter((m) => m.status === 'ACKNOWLEDGED').length;
   const criticalCount = messages.filter((m) => m.priority === 'CRITICAL').length;
   const activeNodes = devices.filter((d) => d.status === 'ONLINE').length;
+  const allNodesOnline = devices.length === 3 && activeNodes === 3;
 
   return (
     <div className="space-y-6">
@@ -28,7 +29,9 @@ export const OverviewView: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-900/60 p-5 rounded-xl border border-slate-800">
         <div>
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span
+              className={`w-2.5 h-2.5 rounded-full ${allNodesOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}
+            />
             <h1 className="text-xl font-bold text-slate-100 font-mono tracking-tight">
               MISSION CONTROL OVERVIEW
             </h1>
@@ -92,7 +95,9 @@ export const OverviewView: React.FC = () => {
             <Radio className="w-4 h-4 text-purple-400" />
           </div>
           <div className="text-2xl font-bold font-mono text-slate-100">{activeNodes} / 3</div>
-          <div className="text-[11px] text-slate-400 mt-1">Team A, Drone, Team B online</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            {activeNodes} of 3 nodes online
+          </div>
         </div>
       </div>
 

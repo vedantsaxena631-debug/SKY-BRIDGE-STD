@@ -74,11 +74,31 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const handleTestPing = async () => {
     setIsPinging(true);
-    await sendTestPing();
-    setTimeout(() => setIsPinging(false), 800);
+    try {
+      await sendTestPing();
+    } catch (err) {
+      console.warn('[TopBar] Test ping failed:', err);
+    } finally {
+      setTimeout(() => setIsPinging(false), 800);
+    }
   };
 
   const isLight = theme === 'light';
+  const serialStatus = serialBridge.connected
+    ? 'USB'
+    : mode === 'DEMO' || serialBridge.isSimulated
+    ? 'DEMO'
+    : 'OFFLINE';
+  const serialStatusClass = serialBridge.connected
+    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-300'
+    : serialStatus === 'DEMO'
+    ? 'bg-purple-500/10 border-purple-500/30 text-purple-600 dark:text-purple-300'
+    : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300';
+  const serialStatusDotClass = serialBridge.connected
+    ? 'bg-emerald-500'
+    : serialStatus === 'DEMO'
+    ? 'bg-purple-500 animate-pulse'
+    : 'bg-amber-500';
 
   return (
     <>
@@ -168,18 +188,10 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span>SOCKET: OK</span>
             </div>
             <div
-              className={`flex items-center gap-1.5 px-2 py-1 rounded border ${
-                serialBridge.connected
-                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-300'
-                  : 'bg-purple-500/10 border-purple-500/30 text-purple-600 dark:text-purple-300'
-              }`}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded border ${serialStatusClass}`}
             >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  serialBridge.connected ? 'bg-emerald-500' : 'bg-purple-500 animate-pulse'
-                }`}
-              />
-              <span>SERIAL: {serialBridge.connected ? 'USB' : 'DEMO'}</span>
+              <span className={`w-2 h-2 rounded-full ${serialStatusDotClass}`} />
+              <span>SERIAL: {serialStatus}</span>
             </div>
           </div>
         </div>

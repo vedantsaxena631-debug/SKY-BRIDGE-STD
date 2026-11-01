@@ -135,7 +135,7 @@ export class DemoSimulator {
             id: `evt_ack_${Date.now()}`,
             timestamp: nowStr,
             type: 'ACK',
-            message: `ACK-RECEIVE: Verification ACK for msgID ${initialMessage.msgID} confirmed by ${initialMessage.from} through Drone Relay.`,
+            message: `ACK-RECEIVE: Verification ACK for msgID ${initialMessage.msgID} confirmed by ${initialMessage.to} through Drone Relay.`,
             sourceNode: initialMessage.to,
             isDemo: true,
           });

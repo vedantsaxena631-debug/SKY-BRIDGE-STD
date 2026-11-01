@@ -66,8 +66,14 @@ export const SendMessageView: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      await sendTestPing(fromNode, toNode);
-      setStatusFeedback('Diagnostic PING acknowledged by drone relay.');
+      const ping = await sendTestPing(fromNode, toNode);
+      setStatusFeedback(
+        ping.status === 'ACKNOWLEDGED'
+          ? `Diagnostic PING acknowledged by ${ping.to}.`
+          : ping.status === 'SENT_TO_BRIDGE'
+          ? `Diagnostic PING sent to the radio gateway; waiting for ${ping.to} ACK.`
+          : `Diagnostic PING ${ping.status.toLowerCase()}; waiting for ${ping.to} ACK.`
+      );
       setTimeout(() => {
         setIsSending(false);
         setStatusFeedback(null);

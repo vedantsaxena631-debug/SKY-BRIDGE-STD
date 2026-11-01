@@ -64,7 +64,7 @@ interface AppContextType {
     isTestPing?: boolean
   ) => Promise<Message>;
   resendMessage: (messageId: string) => Promise<void>;
-  sendTestPing: (from?: NodeId, to?: NodeId) => Promise<void>;
+  sendTestPing: (from?: NodeId, to?: NodeId) => Promise<Message>;
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: () => void;
   connectSerial: (port?: string, baud?: number) => void;
@@ -73,6 +73,61 @@ interface AppContextType {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+const mapBackendNode = (node: unknown, fallback: NodeId): NodeId => {
+  if (node === 'A') return 'TEAM_A';
+  if (node === 'B') return 'TEAM_B';
+  if (node === 'DRONE') return 'DRONE_RELAY';
+  return typeof node === 'string' ? (node as NodeId) : fallback;
+};
+
+const mapBackendStatus = (status: unknown, fallback: Message['status'] = 'QUEUED'): Message['status'] => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'sent_to_bridge') return 'SENT_TO_BRIDGE';
+  if (normalized === 'relayed') return 'RELAYED';
+  if (normalized === 'delivered') return 'ACKNOWLEDGED';
+  if (normalized === 'failed') return 'FAILED';
+  if (normalized === 'failed_no_ack') return 'FAILED_NO_ACK';
+  if (normalized === 'queued') return 'QUEUED';
+  return fallback;
+};
+
+const mapBackendMessage = (message: any, fallback?: Message): Message => {
+  const from = mapBackendNode(message?.from, fallback?.from || 'TEAM_A');
+  const to = mapBackendNode(message?.to, fallback?.to || 'TEAM_B');
+  const timestamp = message?.timestamp ? new Date(message.timestamp) : null;
+  const ackReceivedAt = message?.ackReceivedAt ? new Date(message.ackReceivedAt) : null;
+  const backendMsgId = Number(message?.msgID);
+
+  return {
+    id: String(message?._id || message?.id || fallback?.id || `msg_${message?.msgID || Date.now()}`),
+    msgID: Number.isFinite(backendMsgId) ? backendMsgId : fallback?.msgID || 0,
+    from,
+    to,
+    payload: typeof message?.payload === 'string' ? message.payload : fallback?.payload || '',
+    priority: String(message?.priority || fallback?.priority || 'ROUTINE').toUpperCase() as MessagePriority,
+    status: mapBackendStatus(message?.status, fallback?.status),
+    timestamp: timestamp && !Number.isNaN(timestamp.getTime())
+      ? timestamp.toLocaleTimeString()
+      : fallback?.timestamp || new Date().toLocaleTimeString(),
+    relayCount: Number(message?.relayCount ?? fallback?.relayCount ?? 0),
+    isDemo: typeof message?.isDemo === 'boolean' ? message.isDemo : fallback?.isDemo ?? false,
+    isTestPing: message?.type === 'PING' || fallback?.isTestPing || false,
+    ackReceivedAt: ackReceivedAt && !Number.isNaN(ackReceivedAt.getTime())
+      ? ackReceivedAt.toLocaleTimeString()
+      : fallback?.ackReceivedAt,
+    failureReason: typeof message?.failureReason === 'string' ? message.failureReason : fallback?.failureReason,
+    hops: fallback?.hops || [
+      {
+        node: from,
+        action: 'LoRa RF Transmission',
+        timestamp: timestamp && !Number.isNaN(timestamp.getTime())
+          ? timestamp.toLocaleTimeString()
+          : new Date().toLocaleTimeString(),
+      },
+    ],
+  };
+};
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const auth = useAuth();
@@ -110,12 +165,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
   const [devices, setDevices] = useState<DeviceNode[]>(
     sessionMode === 'LIVE'
-      ? INITIAL_DEVICES.map((d) => ({ ...d, status: 'offline', linkQuality: 0 }))
+      ? INITIAL_DEVICES.map((d) => ({
+          ...d,
+          status: 'UNKNOWN',
+          lastSeen: 'Never',
+          uptimePercent: 0,
+          heartbeatsCount: 0,
+          firmwareVersion: 'Not provided by hardware',
+        }))
       : INITIAL_DEVICES
   );
   const [events, setEvents] = useState<SystemEvent[]>(
     sessionMode === 'LIVE'
-      ? [{ id: 'evt_init', timestamp: new Date().toLocaleTimeString(), type: 'SYSTEM', sourceNode: 'DRONE', message: 'Live Mode Gateway initialized. Awaiting USB hardware telemetry.' }]
+      ? [{ id: 'evt_init', timestamp: new Date().toLocaleTimeString(), type: 'SYSTEM', sourceNode: 'DRONE_RELAY', message: 'Live Mode selected. Awaiting live gateway telemetry.', isDemo: false }]
       : INITIAL_EVENTS
   );
   const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
@@ -128,10 +190,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMode(nextMode);
     setCurrentUser(getAuthUser());
     if (nextMode === 'LIVE') {
-      setDevices(INITIAL_DEVICES.map((d) => ({ ...d, status: 'offline', linkQuality: 0 })));
+      setMessages([]);
+      setDevices(INITIAL_DEVICES.map((d) => ({
+        ...d,
+        status: 'UNKNOWN',
+        lastSeen: 'Never',
+        uptimePercent: 0,
+        heartbeatsCount: 0,
+        firmwareVersion: 'Not provided by hardware',
+      })));
+      setEvents([
+        {
+          id: `evt_live_init_${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'SYSTEM',
+          sourceNode: 'DRONE_RELAY',
+          message: 'Live Mode selected. Awaiting live gateway telemetry.',
+          isDemo: false,
+        },
+      ]);
+      setNotifications([]);
+      setAuditLogs([]);
+      setActiveTransmission(null);
+      setSerialBridge((prev) => ({
+        ...prev,
+        connected: false,
+        port: '',
+        statusMessage: 'Awaiting live gateway telemetry.',
+        isSimulated: false,
+      }));
     } else {
       setMessages(INITIAL_MESSAGES);
       setDevices(INITIAL_DEVICES);
+      setEvents(INITIAL_EVENTS);
+      setNotifications(INITIAL_NOTIFICATIONS);
+      setAuditLogs(INITIAL_AUDIT_LOGS);
+      setActiveTransmission(null);
+      setSerialBridge((prev) => ({
+        ...prev,
+        connected: false,
+        port: '',
+        statusMessage: 'Demo simulation bridge active.',
+        isSimulated: true,
+      }));
     }
   }, [auth.mode, auth.user?.username]);
 
@@ -141,39 +242,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const fetchLiveUpdates = async () => {
       try {
-        const [msgsRes, serialRes] = await Promise.allSettled([
+        const [msgsRes, serialRes, statusRes] = await Promise.allSettled([
           api.get('/messages'),
           api.get('/serial/status'),
+          api.get('/status'),
         ]);
 
         if (msgsRes.status === 'fulfilled' && Array.isArray(msgsRes.value)) {
-          const mappedMsgs: Message[] = msgsRes.value.map((m: any) => ({
-            id: m._id || 'msg_' + m.msgID,
-            msgID: m.msgID,
-            from: m.from === 'A' ? 'TEAM_A' : m.from === 'B' ? 'TEAM_B' : m.from,
-            to: m.to === 'A' ? 'TEAM_A' : m.to === 'B' ? 'TEAM_B' : m.to,
-            payload: m.payload,
-            priority: (m.priority || 'ROUTINE').toUpperCase() as MessagePriority,
-            status:
-              m.status === 'delivered' ? 'ACKNOWLEDGED' :
-              m.status === 'relayed' ? 'RELAYED' :
-              m.status === 'sent_to_bridge' ? 'SENT_TO_BRIDGE' :
-              m.status === 'failed' ? 'FAILED' :
-              'QUEUED',
-            timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(),
-            relayCount: m.relayCount || 0,
-            isDemo: false,
-            ackReceivedAt: m.ackReceivedAt ? new Date(m.ackReceivedAt).toLocaleTimeString() : undefined,
-            failureReason: typeof m.failureReason === 'string' ? m.failureReason : undefined,
-            hops: [
-              {
-                node: m.from === 'A' ? 'TEAM_A' : 'TEAM_B',
-                action: 'LoRa RF Transmission',
-                timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(),
-              },
-            ],
-          }));
-          setMessages(mappedMsgs);
+          const mappedMsgs: Message[] = msgsRes.value.map((m: any) => mapBackendMessage(m));
+          setMessages((prev) => {
+            const unpersistedFailures = prev.filter(
+              (message) => message.status === 'FAILED' &&
+                !mappedMsgs.some((latest) => latest.id === message.id || latest.msgID === message.msgID)
+            );
+            return [...unpersistedFailures, ...mappedMsgs];
+          });
+          setActiveTransmission((current) => {
+            if (!current) return null;
+            const latest = mappedMsgs.find(
+              (message) => message.id === current.id || message.msgID === current.msgID
+            );
+            if (!latest) return current.status === 'FAILED' ? null : current;
+            return ['ACKNOWLEDGED', 'FAILED', 'FAILED_NO_ACK'].includes(latest.status) ? null : latest;
+          });
         }
 
         if (serialRes.status === 'fulfilled' && serialRes.value) {
@@ -187,6 +278,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ? 'Connected to ESP32 Gateway on ' + s.port + ' @ ' + s.baudRate + ' baud'
               : 'Serial bridge disconnected',
             isSimulated: false,
+          }));
+        }
+
+        if (statusRes.status === 'fulfilled' && statusRes.value?.nodes) {
+          const nodes = statusRes.value.nodes;
+          setDevices((prev) => prev.map((device) => {
+            const nodeId = device.id === 'TEAM_A' ? 'A' : device.id === 'TEAM_B' ? 'B' : 'DRONE';
+            const node = nodes[nodeId];
+            const reportedStatus = String(node?.status || 'unknown').toLowerCase();
+            const status: DeviceNode['status'] =
+              reportedStatus === 'online'
+                ? 'ONLINE'
+                : reportedStatus === 'standby'
+                ? 'STANDBY'
+                : reportedStatus === 'offline'
+                ? 'OFFLINE'
+                : 'UNKNOWN';
+
+            return {
+              ...device,
+              status,
+              lastSeen: node?.lastSeen ? new Date(node.lastSeen).toLocaleTimeString() : 'Never',
+            };
           }));
         }
       } catch (err) {}
@@ -394,77 +508,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const backendFrom = from === 'TEAM_A' ? 'A' : from === 'TEAM_B' ? 'B' : from;
       const backendTo = to === 'TEAM_A' ? 'A' : to === 'TEAM_B' ? 'B' : to;
 
+      let submittedMessage = newMsg;
       try {
-        await api.post('/messages', {
+        const response = await api.post('/messages', {
           from: backendFrom,
           to: backendTo,
           payload,
           priority: priority.toLowerCase(),
           type: isTestPing ? 'PING' : 'MSG',
         });
+        if (mode === 'LIVE') {
+          submittedMessage = mapBackendMessage(response, newMsg);
+        }
       } catch (err: any) {
         if (mode === 'LIVE') {
-          const errMsg = String(err?.message || '');
-          const is405OrStatic =
-            err?.status === 405 ||
-            err?.code === 'METHOD_NOT_ALLOWED' ||
-            err?.isServerUnavailable ||
-            err?.code === 'NETWORK' ||
-            errMsg.includes('405') ||
-            errMsg.toLowerCase().includes('method not allowed') ||
-            errMsg.toLowerCase().includes('cannot reach') ||
-            errMsg.toLowerCase().includes('failed to fetch');
-
-          // If running on a static host/Live Server where POST returns 405, or if running a diagnostic ping without serial hardware:
-          if (is405OrStatic || (isTestPing && (err?.status === 503 || err?.code === 'SERIAL_BRIDGE_UNAVAILABLE'))) {
-            console.warn('[skybridge] Live server static 405 or hardware bridge offline. Routing probe via local drone relay simulation.');
-            const fallbackNotif: NotificationItem = {
-              id: `notif_fb_${Date.now()}`,
-              title: isTestPing ? 'Diagnostic Ping (Loopback)' : 'Transmission Dispatched',
-              message: is405OrStatic
-                ? `Live web server returned 405 Method Not Allowed (static host). Packet processed via autonomous drone repeater simulation.`
-                : `Hardware serial bridge offline. Diagnostic ping verified via local drone loopback.`,
-              severity: 'warning',
-              timestamp: nowStr,
-              read: false,
-              relatedMsgId: msgID,
-              isDemo: false,
-            };
-            setNotifications((prev) => [fallbackNotif, ...prev]);
-            // Do not throw; proceed to simulation pipeline below
-          } else {
-            // Real physical serial unplugged error on field transmission
-            const failedMsg: Message = {
-              ...newMsg,
-              status: 'FAILED',
-              hops: [
-                ...newMsg.hops,
-                {
-                  node: from,
-                  action: `Failed: ${err.message || 'Serial bridge not connected'}`,
-                  timestamp: nowStr,
-                },
-              ],
-            };
-            setMessages((prev) => [failedMsg, ...prev]);
-            const failureNotif: NotificationItem = {
-              id: `notif_fail_${Date.now()}`,
-              title: 'Live Transmission Failed',
-              message: `Could not transmit to ${to}: ${err.message || 'Serial bridge disconnected.'}`,
-              severity: 'critical',
-              timestamp: nowStr,
-              read: false,
-              relatedMsgId: msgID,
-              isDemo: false,
-            };
-            setNotifications((prev) => [failureNotif, ...prev]);
-            throw err;
-          }
+          const failureReason = String(err?.message || 'Live transmission failed.');
+          const failedMsg: Message = {
+            ...newMsg,
+            status: 'FAILED',
+            failureReason,
+            hops: [
+              ...newMsg.hops,
+              {
+                node: from,
+                action: `Failed: ${failureReason}`,
+                timestamp: nowStr,
+              },
+            ],
+          };
+          setMessages((prev) => [failedMsg, ...prev]);
+          setActiveTransmission(failedMsg);
+          setTimeout(() => {
+            setActiveTransmission((current) => current?.id === failedMsg.id ? null : current);
+          }, 3000);
+          const failureNotif: NotificationItem = {
+            id: `notif_fail_${Date.now()}`,
+            title: 'Live Transmission Failed',
+            message: `Could not transmit to ${to}: ${failureReason}`,
+            severity: 'critical',
+            timestamp: nowStr,
+            read: false,
+            relatedMsgId: msgID,
+            isDemo: false,
+          };
+          setNotifications((prev) => [failureNotif, ...prev]);
+          throw err;
         }
       }
 
-      setMessages((prev) => [newMsg, ...prev]);
-      setActiveTransmission(newMsg);
+      setMessages((prev) => [submittedMessage, ...prev]);
+      setActiveTransmission(submittedMessage);
 
       // Audit Log
       const audit: AuditLogEntry = {
@@ -474,7 +567,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         role: currentUser.role,
         action: isTestPing ? 'SEND_TEST_PING' : 'SEND_MESSAGE',
         target: `${from} -> ${to}`,
-        metadata: { msgID, payload, priority, isDemo: mode === 'DEMO' },
+        metadata: { msgID: submittedMessage.msgID, payload, priority, isDemo: mode === 'DEMO' },
       };
       setAuditLogs((prev) => [audit, ...prev]);
 
@@ -498,28 +591,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setNotifications((prev) => [notif, ...prev]);
       }
 
-      // Run simulation hop pipeline
-      demoSimulator.simulateHopTransmission(newMsg, {
-        onMessageUpdate: (updatedMsg) => {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === updatedMsg.id ? updatedMsg : m))
-          );
-          setActiveTransmission(updatedMsg);
-        },
-        onEvent: (event) => {
-          setEvents((prev) => [event, ...prev]);
-        },
-        onAckReceived: (ackedMsg) => {
-          if (soundEnabled) {
-            audioAlert.playAckPing();
-          }
-          setTimeout(() => {
-            setActiveTransmission((curr) => (curr?.id === ackedMsg.id ? null : curr));
-          }, 3000);
-        },
-      });
+      if (mode === 'DEMO') {
+        // Only the isolated demo session may synthesize relay and ACK events.
+        demoSimulator.simulateHopTransmission(submittedMessage, {
+          onMessageUpdate: (updatedMsg) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === updatedMsg.id ? updatedMsg : m))
+            );
+            setActiveTransmission(updatedMsg);
+          },
+          onEvent: (event) => {
+            setEvents((prev) => [event, ...prev]);
+          },
+          onAckReceived: (ackedMsg) => {
+            if (soundEnabled) {
+              audioAlert.playAckPing();
+            }
+            setTimeout(() => {
+              setActiveTransmission((curr) => (curr?.id === ackedMsg.id ? null : curr));
+            }, 3000);
+          },
+        });
+      }
 
-      return newMsg;
+      return submittedMessage;
     },
     [currentUser, mode, soundEnabled]
   );
@@ -536,8 +631,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const sendTestPing = async (from: NodeId = 'TEAM_A', to: NodeId = 'TEAM_B') => {
-    await sendMessage(from, to, 'PING // LORA DIAGNOSTIC PROBE', 'ROUTINE', true);
+  const sendTestPing = async (from?: NodeId, to?: NodeId): Promise<Message> => {
+    const defaultFrom: NodeId =
+      currentUser.role === 'operator' && currentUser.team === 'B' ? 'TEAM_B' : 'TEAM_A';
+    const resolvedFrom = from ?? defaultFrom;
+    const resolvedTo = to ?? (resolvedFrom === 'TEAM_A' ? 'TEAM_B' : 'TEAM_A');
+
+    return sendMessage(resolvedFrom, resolvedTo, 'PING // LORA DIAGNOSTIC PROBE', 'ROUTINE', true);
   };
 
   const exportMessagesCsv = () => {

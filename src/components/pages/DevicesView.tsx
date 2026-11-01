@@ -12,9 +12,19 @@ import {
   Wifi,
   Zap,
 } from 'lucide-react';
+import type { DeviceNode } from '../../types';
+
+const getStatusStyles = (status: DeviceNode['status']) => {
+  if (status === 'ONLINE') return { textClass: 'text-emerald-400', dotClass: 'bg-emerald-400' };
+  if (status === 'STANDBY') return { textClass: 'text-amber-400', dotClass: 'bg-amber-400' };
+  if (status === 'OFFLINE') return { textClass: 'text-rose-400', dotClass: 'bg-rose-400' };
+  return { textClass: 'text-slate-400', dotClass: 'bg-slate-400' };
+};
 
 export const DevicesView: React.FC = () => {
   const { devices, messages } = useApp();
+  const onlineNodeCount = devices.filter((device) => device.status === 'ONLINE').length;
+  const allNodesOnline = devices.length > 0 && onlineNodeCount === devices.length;
 
   return (
     <div className="space-y-6">
@@ -32,15 +42,16 @@ export const DevicesView: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 text-xs font-mono text-emerald-400 bg-emerald-950/40 px-3 py-1.5 rounded-lg border border-emerald-500/30">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span>All 3 Nodes Online & Synchronized</span>
+        <div className={`flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded-lg border ${allNodesOnline ? 'text-emerald-400 bg-emerald-950/40 border-emerald-500/30' : 'text-amber-300 bg-amber-950/30 border-amber-500/30'}`}>
+          <span className={`w-2 h-2 rounded-full ${allNodesOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+          <span>{onlineNodeCount} of {devices.length} nodes online</span>
         </div>
       </div>
 
       {/* Nodes Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {devices.map((device) => {
+          const statusStyles = getStatusStyles(device.status);
           const deviceMessages = messages.filter(
             (m) => m.from === device.id || m.to === device.id
           );
@@ -56,8 +67,8 @@ export const DevicesView: React.FC = () => {
                   <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300">
                     {device.id}
                   </span>
-                  <div className="flex items-center gap-1.5 text-xs font-mono text-emerald-400">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <div className={`flex items-center gap-1.5 text-xs font-mono ${statusStyles.textClass}`}>
+                    <span className={`w-2 h-2 rounded-full ${statusStyles.dotClass}`} />
                     <span>{device.status}</span>
                   </div>
                 </div>

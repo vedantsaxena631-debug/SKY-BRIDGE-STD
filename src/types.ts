@@ -49,7 +49,7 @@ export interface DeviceNode {
   name: string;
   role: string;
   type: 'GROUND_NODE' | 'AERIAL_RELAY';
-  status: 'ONLINE' | 'STANDBY' | 'OFFLINE';
+  status: 'ONLINE' | 'STANDBY' | 'OFFLINE' | 'UNKNOWN';
   lastSeen: string;
   hardware: {
     mcu: string;
