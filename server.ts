@@ -94,11 +94,7 @@ async function startServer() {
       '[gateway] Remote mode enabled. Render serial connection disabled.'
     );
   } else {
-    serialService
-      .connect()
-      .catch((err) =>
-        console.warn('[serial] connect notice:', err.message)
-      );
+    serialService.startAutoDetect();
   }
 
   // Marks a node offline when nothing has been heard from it. Runs in local and remote gateway mode.

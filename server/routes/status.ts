@@ -12,13 +12,16 @@ const BOOT_TIME = Date.now();
 router.get('/status', async (_req: Request, res: Response) => {
   const nodes: Record<string, { status: string; lastSeen: any }> = {};
   const isDbUp = isDbConnected();
+  const heartbeatTimeout = Number(process.env.HEARTBEAT_TIMEOUT_MS || 20000);
 
   try {
     const devices = await Device.find({ isDemo: false }).select('deviceId status lastSeen role').lean();
     for (const id of ['A', 'DRONE', 'B']) {
       const d = (devices as any[]).find((x: any) => x.deviceId === id);
+      const lastSeen = d?.lastSeen ? new Date(d.lastSeen) : null;
+      const isFresh = Boolean(lastSeen && Date.now() - lastSeen.getTime() < heartbeatTimeout);
       nodes[id] = d
-        ? { status: d.status, lastSeen: d.lastSeen }
+        ? { status: d.status === 'online' && !isFresh ? 'offline' : d.status, lastSeen: d.lastSeen }
         : { status: 'unknown', lastSeen: null };
     }
   } catch {

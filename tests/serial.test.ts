@@ -1,8 +1,48 @@
 import { serialService } from '../server/services/serialService';
 import { Message } from '../server/models/Message';
+import { Device } from '../server/models/Device';
 
 export async function runSerialParsingTests(): Promise<void> {
   console.log('\n  Suite: Hardware Serial Ingestion & Parsing');
+
+  // Unverified serial traffic must not create messages or mark a node online.
+  serialService.verifiedNodeId = null;
+  const unverifiedPacket = JSON.stringify({
+    type: 'MSG',
+    from: 'A',
+    to: 'B',
+    msgID: 7699,
+    payload: 'UNVERIFIED DEVICE',
+  });
+  await (serialService as any)._handleLine(unverifiedPacket);
+  const unverifiedMessage = await Message.findOne({ msgID: 7699, isDemo: false });
+  const unverifiedDevices = await Device.find({ deviceId: 'A', isDemo: false }).lean();
+  if (unverifiedMessage || unverifiedDevices.some((device: any) => device.status === 'online')) {
+    throw new Error('Unverified serial traffic was accepted as real LoRa hardware.');
+  }
+
+  // A failed radio-init event is not sufficient; successful initialization is required.
+  await (serialService as any)._handleLine(JSON.stringify({
+    type: 'SYSTEM_EVENT',
+    event: 'NODE_ONLINE',
+    nodeId: 'TEAM_A',
+    radioReady: false,
+  }));
+  if (serialService.verifiedNodeId) {
+    throw new Error('Node was accepted without a successful LoRa initialization.');
+  }
+
+  // Current firmware emits this only after the SX1278 initialization succeeds.
+  await (serialService as any)._handleLine(JSON.stringify({
+    type: 'SYSTEM_EVENT',
+    event: 'NODE_ONLINE',
+    nodeId: 'TEAM_A',
+    radioReady: true,
+  }));
+  if (serialService.verifiedNodeId !== 'A') {
+    throw new Error('Valid Team A LoRa-ready handshake was not accepted.');
+  }
+  console.log('    ✓ ignores unverified devices and accepts a radio-ready node handshake');
 
   // Test 1: Stores a valid JSON line
   {

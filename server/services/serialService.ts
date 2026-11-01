@@ -6,6 +6,7 @@ import { generateCorrelationId, logTrace } from '../utils/trace';
 
 const VALID_NODES = ['A', 'B', 'DRONE'];
 const VALID_TYPES = ['MSG', 'ACK', 'HEARTBEAT', 'PING', 'STATUS'];
+const ESP_USB_BRIDGE_IDS = new Set(['303a', '10c4', '1a86', '0403', '067b']);
 
 /**
  * Maps a callsign such as "TEAM_A", "A", "Node B" or "DRONE RELAY" to A, B or DRONE.
@@ -32,10 +33,17 @@ export class SerialService extends EventEmitter {
   public stats = { linesRead: 0, linesParsed: 0, linesDropped: 0, messagesWritten: 0 };
 
   // Protocol autodetection & ASCII block parser state
-  public detectedProtocol: 'JSON' | 'SB1_ASCII' = 'JSON';
+  public detectedProtocol: 'JSON' | 'SB1_ASCII' = 'JSON';
   private _asciiBlock: Record<string, string> = {};
   private _currentBlockType: string = 'NONE';
   private _pendingOutboxMap = new Map<number, { packet: any; sentAt: number }>();
+
+  public verifiedNodeId: 'A' | 'B' | 'DRONE' | null = null;
+  private autoDetectTimer: any = null;
+  private probeTimer: any = null;
+  private autoDetectInProgress = false;
+  private autoDetectEnabled = false;
+  private rejectedPorts = new Map<string, number>();
 
   constructor() {
     super();
@@ -62,6 +70,51 @@ export class SerialService extends EventEmitter {
     } catch (err: any) {
       console.warn('[serial] listAvailablePorts notice:', err.message);
       return [];
+    }
+  }
+
+  startAutoDetect(intervalMs: number = 1000) {
+    this.autoDetectEnabled = true;
+    if (this.autoDetectTimer) return;
+    void this._scanForHardware();
+    this.autoDetectTimer = setInterval(() => void this._scanForHardware(), intervalMs);
+    console.log('[serial] USB hardware auto-detection enabled.');
+  }
+
+  private async _scanForHardware() {
+    if (!this.autoDetectEnabled || this.connected || this.autoDetectInProgress) return;
+    this.autoDetectInProgress = true;
+    try {
+      const ports = await this.listAvailablePorts();
+      const configuredPaths = new Set(
+        [process.env.SERIAL_PORT, process.env.SERIAL_PORT_A, process.env.SERIAL_PORT_B]
+          .map((path) => (path || '').trim())
+          .filter(Boolean)
+      );
+      const now = Date.now();
+      const presentPaths = new Set(ports.map((candidate: any) => candidate.path));
+      for (const rejectedPath of this.rejectedPorts.keys()) {
+        if (!presentPaths.has(rejectedPath)) this.rejectedPorts.delete(rejectedPath);
+      }
+      const candidates = [...ports].sort((left: any, right: any) =>
+        Number(configuredPaths.has(right.path)) - Number(configuredPaths.has(left.path))
+      );
+      for (const candidate of candidates) {
+        if (this.connected) break;
+        const vendorId = String(candidate.vendorId || '').toLowerCase();
+        const isConfigured = configuredPaths.has(candidate.path);
+        if (!isConfigured && !ESP_USB_BRIDGE_IDS.has(vendorId.replace(/^0x/, ''))) continue;
+        if ((this.rejectedPorts.get(candidate.path) || 0) > now) continue;
+
+        const result = await this.connect(
+          candidate.path,
+          Number(process.env.SERIAL_BAUD_RATE || 115200)
+        );
+        if (result.connected) break;
+        this.rejectedPorts.set(candidate.path, Date.now() + 5000);
+      }
+    } finally {
+      this.autoDetectInProgress = false;
     }
   }
 
@@ -118,6 +171,9 @@ export class SerialService extends EventEmitter {
 
           this.port.on('close', () => {
             this.connected = false;
+            this.verifiedNodeId = null;
+            if (this.probeTimer) clearTimeout(this.probeTimer);
+            this.probeTimer = null;
             console.warn('[serial] port closed');
             this.emit('status', this.getStatus());
             if (!this.shuttingDown) this._scheduleReconnect();
@@ -129,11 +185,9 @@ export class SerialService extends EventEmitter {
             this.emit('status', this.getStatus());
           });
 
-          // Team A is the gateway connected locally
-          this._touchDevice('A');
-
           this.emit('status', this.getStatus());
           this._logEvent('serial_connected', `Serial bridge connected on ${portPath}`);
+          this._beginHardwareProbe(portPath);
           resolve({ connected: true, port: portPath });
         });
       });
@@ -145,7 +199,7 @@ export class SerialService extends EventEmitter {
   }
 
   private _scheduleReconnect() {
-    if (this.shuttingDown || this.reconnectTimer) return;
+    if (this.shuttingDown || this.autoDetectEnabled || this.reconnectTimer) return;
     const delay = this.reconnectDelay;
     console.log(`[serial] retrying in ${delay / 1000}s`);
     this.reconnectTimer = setTimeout(async () => {
@@ -158,10 +212,16 @@ export class SerialService extends EventEmitter {
   async disconnect() {
     this.shuttingDown = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = null;
     if (this.port?.isOpen) {
       await new Promise((r) => this.port.close(r));
     }
     this.connected = false;
+    this.verifiedNodeId = null;
+    this.port = null;
+    this.parser = null;
+    this.portPath = null;
     this.shuttingDown = false;
     this.emit('status', this.getStatus());
     return this.getStatus();
@@ -169,9 +229,10 @@ export class SerialService extends EventEmitter {
 
   getStatus() {
     return {
-      connected: this.connected,
-      port: this.portPath || null,
+      connected: this.connected && this.verifiedNodeId !== null,
+      port: this.verifiedNodeId ? this.portPath : null,
       baudRate: this.baudRate || null,
+      nodeId: this.verifiedNodeId,
       lastError: this.lastError,
       stats: { ...this.stats },
       protocol: this.detectedProtocol,
@@ -184,9 +245,6 @@ export class SerialService extends EventEmitter {
     if (!line) return;
     console.log("[serial:rx]", JSON.stringify(line));
 
-    // Any line received over serial from the local gateway confirms Team A hardware is alive
-    await this._touchDevice('A');
-
     // 1. JSON PROTOCOL SUPPORT
     if (line.startsWith('{')) {
       let packet: any;
@@ -195,6 +253,28 @@ export class SerialService extends EventEmitter {
       } catch {
         this.stats.linesDropped += 1;
         console.warn('[serial] dropped unparseable line:', line.slice(0, 120));
+        return;
+      }
+
+      if (packet?.type === 'SYSTEM_EVENT') {
+        const nodeId = nodeFromName(packet.nodeId);
+        if (packet.event === 'NODE_ONLINE' && packet.radioReady === true && nodeId) {
+          this.verifiedNodeId = nodeId;
+          if (this.probeTimer) clearTimeout(this.probeTimer);
+          this.probeTimer = null;
+          if (this.portPath) this.rejectedPorts.delete(this.portPath);
+          await this._touchDevice(nodeId);
+          this.emit('status', this.getStatus());
+          console.log(`[serial] verified LoRa hardware ${nodeId} on ${this.portPath}.`);
+        } else if (packet.event === 'RADIO_INIT_FAILED') {
+          this.verifiedNodeId = null;
+          if (this.portPath) void this._rejectUnverifiedPort(this.portPath, packet.details || 'LoRa radio initialization failed.');
+        }
+        return;
+      }
+
+      if (!this.verifiedNodeId) {
+        this.stats.linesDropped += 1;
         return;
       }
 
@@ -240,6 +320,10 @@ export class SerialService extends EventEmitter {
       }
       return;
     }
+
+    // Legacy/plain serial text cannot prove the radio initialized, so it is
+    // ignored for node presence and hardware message handling.
+    if (!this.verifiedNodeId) return;
 
     // 2. SB1 ASCII PROTOCOL SUPPORT (Standard SkyBridge ESP32 firmware)
     await this._handleAsciiLine(line);
@@ -422,10 +506,53 @@ export class SerialService extends EventEmitter {
     if (p.type === 'MSG') {
       if (typeof p.msgID !== 'number') return false;
       if (typeof p.payload !== 'string' || p.payload.length === 0) return false;
-      if (Buffer.byteLength(p.payload, 'utf8') > 179) return false;
+      if (Buffer.byteLength(p.payload, 'utf8') > 179) return false;
     }
     if (p.type === 'ACK' && typeof p.msgID !== 'number') return false;
     return true;
+  }
+
+  private _beginHardwareProbe(portPath: string) {
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = setTimeout(() => {
+      if (!this.connected || this.portPath !== portPath || this.verifiedNodeId) return;
+      void this._rejectUnverifiedPort(portPath, 'No LoRa-ready node was reported by this USB device.');
+    }, 4500);
+
+    const port = this.port;
+    if (!port?.isOpen) return;
+    port.set({ dtr: false, rts: false }, (lineError: any) => {
+      if (lineError) {
+        console.warn(`[serial] reset lines unavailable on ${portPath}: ${lineError.message}`);
+        return;
+      }
+      setTimeout(() => port.set({ rts: true }, (err: any) => {
+        if (err) console.warn(`[serial] reset pulse failed on ${portPath}: ${err.message}`);
+      }), 200);
+      setTimeout(() => port.set({ rts: false }, (err: any) => {
+        if (err) console.warn(`[serial] reset release failed on ${portPath}: ${err.message}`);
+      }), 350);
+    });
+  }
+
+  private async _rejectUnverifiedPort(portPath: string, reason: string) {
+    if (this.portPath !== portPath || this.verifiedNodeId) return;
+    this.rejectedPorts.set(portPath, Date.now() + 30000);
+    this.lastError = String(reason).slice(0, 240);
+    console.warn(`[serial] ignored non-LoRa USB device on ${portPath}: ${this.lastError}`);
+    this.shuttingDown = true;
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = null;
+    if (this.port?.isOpen) {
+      await new Promise<void>((resolve) => this.port.close(() => resolve()));
+    }
+    this.connected = false;
+    this.verifiedNodeId = null;
+    this.port = null;
+    this.parser = null;
+    this.portPath = null;
+    this.shuttingDown = false;
+    this.emit('status', this.getStatus());
   }
 
   private async _handleMessage(packet: any, correlationId?: string) {
@@ -503,13 +630,14 @@ export class SerialService extends EventEmitter {
   }
 
   private async _touchDevice(deviceId: string, batteryVolts?: number) {
-    if (!deviceId) return;
+    const normalizedDeviceId = nodeFromName(deviceId);
+    if (!normalizedDeviceId) return;
     try {
       const update: any = { status: 'online', lastSeen: new Date() };
       if (typeof batteryVolts === 'number') update.batteryVolts = batteryVolts;
 
       const device = await Device.findOneAndUpdate(
-        { deviceId, isDemo: false },
+        { deviceId: normalizedDeviceId, isDemo: false },
         { $set: update },
         { returnDocument: 'after', upsert: true }
       );
@@ -525,7 +653,7 @@ export class SerialService extends EventEmitter {
   }
 
   async send(packet: any) {
-    if (!this.connected || !this.port?.isOpen) {
+    if (!this.connected || !this.verifiedNodeId || !this.port?.isOpen) {
       const err: any = new Error('Serial bridge not connected');
       err.code = 'SERIAL_DISCONNECTED';
       throw err;
@@ -543,7 +671,7 @@ export class SerialService extends EventEmitter {
       const prioStr = String(packet.priority || 'routine').toUpperCase();
       const prio = prioStr.includes('EMERG') || prioStr.includes('CRIT') ? 'EMERGENCY' : prioStr.includes('URG') ? 'URGENT' : 'NORMAL';
       const receiver = packet.to === 'A' ? 'TEAM_A' : packet.to === 'B' ? 'TEAM_B' : packet.to;
-      line = `SEND|${prio}|${receiver}|${packet.payload}\r\n`;
+      line = `SEND|${prio}|${receiver}|${packet.payload}\r\n`;
       console.log('[serial:tx]', JSON.stringify(line.trim()));
     }
 
@@ -570,17 +698,15 @@ export function startHeartbeatSweep(intervalMs: number = 5000) {
   const timeout = Number(process.env.HEARTBEAT_TIMEOUT_MS || 20000);
   return setInterval(async () => {
     try {
-      // Keep Team A (connected host gateway) online as long as serial port is connected
-      if (serialService.connected) {
-        // Tells dashboards too (the old silent database write never reached the browser)
-        await serialService.markSeen('A');
+      // Keep only the node that passed its firmware LoRa-init handshake online.
+      if (serialService.connected && serialService.verifiedNodeId) {
+        await serialService.markSeen(serialService.verifiedNodeId);
       }
 
       const cutoff = new Date(Date.now() - timeout);
-      // Sweeps devices that are genuinely stale (excluding connected base station 'A')
       const staleFilter: any = { isDemo: false, status: 'online', lastSeen: { $lt: cutoff } };
-      if (serialService.connected) {
-        staleFilter.deviceId = { $ne: 'A' };
+      if (serialService.connected && serialService.verifiedNodeId) {
+        staleFilter.deviceId = { $ne: serialService.verifiedNodeId };
       }
       const stale: any[] = await Device.find(staleFilter);
       for (const device of stale) {

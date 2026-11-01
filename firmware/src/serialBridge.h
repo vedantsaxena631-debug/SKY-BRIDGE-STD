@@ -9,7 +9,7 @@ public:
   SerialBridge();
   void begin(unsigned long baud);
   void emit(const SkyMessage& msg);
-  void emitRawEvent(const char* eventType, const char* details);
+  void emitRawEvent(const char* eventType, const char* details, const char* nodeId, bool radioReady);
   bool checkIncoming(SkyMessage& outMsg);
 
 private:

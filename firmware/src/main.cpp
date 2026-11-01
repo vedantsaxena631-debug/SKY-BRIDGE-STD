@@ -13,7 +13,7 @@ void setup() {
   // 2. Initialize SX1278 SPI LoRa Transceiver
   if (!radio.begin()) {
     // Hardware failure alert
-    serialBridge.emitRawEvent("RADIO_INIT_FAILED", "Failed to initialize SX1278 on SPI bus. Check NSS/RST/DIO0 wiring.");
+    serialBridge.emitRawEvent("RADIO_INIT_FAILED", "Failed to initialize SX1278 on SPI bus. Check NSS/RST/DIO0 wiring.", NODE_CALLSIGN, false);
 
 #if THIS_NODE_ROLE == NODE_ROLE_DRONE
     // Rapid strobe on Drone LED indicates radio fault
@@ -32,10 +32,10 @@ void setup() {
   // 3. Initialize Role-Specific Hardware
 #if THIS_NODE_ROLE == NODE_ROLE_DRONE
   initDroneRelay();
-  serialBridge.emitRawEvent("NODE_ONLINE", "Drone Airborne Repeater initialized successfully.");
+  serialBridge.emitRawEvent("NODE_ONLINE", "Drone Airborne Repeater initialized successfully.", NODE_CALLSIGN, true);
 #else
   initGroundNode();
-  serialBridge.emitRawEvent("NODE_ONLINE", "Ground Base Station initialized successfully.");
+  serialBridge.emitRawEvent("NODE_ONLINE", "Ground Base Station initialized successfully.", NODE_CALLSIGN, true);
 #endif
 }
 

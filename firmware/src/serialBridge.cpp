@@ -16,11 +16,13 @@ void SerialBridge::emit(const SkyMessage& msg) {
   Serial.println(json);
 }
 
-void SerialBridge::emitRawEvent(const char* eventType, const char* details) {
+void SerialBridge::emitRawEvent(const char* eventType, const char* details, const char* nodeId, bool radioReady) {
   StaticJsonDocument<256> doc;
   doc["type"] = "SYSTEM_EVENT";
   doc["event"] = eventType;
   doc["details"] = details;
+  doc["nodeId"] = nodeId;
+  doc["radioReady"] = radioReady;
   doc["timestamp"] = millis();
 
   String out;

@@ -2,6 +2,7 @@
  * Bridges both USB-connected ESP32 LoRa stations to the live SkyBridge API.
  * Team A and Team B use the same newline-delimited JSON protocol as firmware.
  */
+import 'dotenv/config';
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
 
@@ -11,9 +12,12 @@ type PendingState = 'awaiting_ack' | 'busy_wait' | 'ack_pending' | 'failure_pend
 type GatewayNodeMode = NodeId | 'BOTH';
 
 interface GatewayPort {
-  nodeId: NodeId;
+  nodeId: NodeId | null;
+  expectedNodeId: NodeId | null;
+  portName: string;
   port: SerialPort;
   ready: boolean;
+  validationTimer: ReturnType<typeof setTimeout> | null;
 }
 
 interface PendingTransmission {
@@ -38,10 +42,12 @@ if (configuredNodeMode !== 'A' && configuredNodeMode !== 'B' && configuredNodeMo
 }
 const GATEWAY_NODE_MODE = configuredNodeMode as GatewayNodeMode;
 const ACTIVE_NODES: NodeId[] = GATEWAY_NODE_MODE === 'BOTH' ? ['A', 'B'] : [GATEWAY_NODE_MODE];
-const SERIAL_PORTS: Record<NodeId, string> = {
-  A: process.env.SERIAL_PORT_A || process.env.SERIAL_PORT || 'COM8',
-  B: process.env.SERIAL_PORT_B || 'COM12',
+const SERIAL_PORTS: Partial<Record<NodeId, string>> = {
+  A: process.env.SERIAL_PORT_A?.trim() || undefined,
+  B: process.env.SERIAL_PORT_B?.trim() || undefined,
 };
+const GENERIC_SERIAL_PORT = process.env.SERIAL_PORT?.trim() || '';
+const ESP_USB_BRIDGE_IDS = new Set(['303a', '10c4', '1a86', '0403', '067b']);
 const MAX_PAYLOAD_BYTES = 179;
 const ACK_TIMEOUT_MS = 8000;
 const MAX_RADIO_ATTEMPTS = 3;
@@ -49,9 +55,12 @@ const HOST_BUSY_RETRY_MS = 1000;
 const HOST_BUSY_MAX_WAIT_MS = 10000;
 
 const gatewayPorts = new Map<NodeId, GatewayPort>();
+const gatewayPortsByPath = new Map<string, GatewayPort>();
+const rejectedPorts = new Map<string, number>();
 const pendingTransmissions = new Map<number, PendingTransmission>();
 let outboxPollInProgress = false;
 let pendingSweepInProgress = false;
+let portScanInProgress = false;
 let outboxWarned = false;
 
 function nodeFromName(raw: unknown): NetworkNodeId | null {
@@ -63,6 +72,10 @@ function nodeFromName(raw: unknown): NetworkNodeId | null {
 
 function callsign(nodeId: NodeId): string {
   return 'TEAM_' + nodeId;
+}
+
+function serialPortName(nodeId: NodeId): string {
+  return gatewayPorts.get(nodeId)?.portName || SERIAL_PORTS[nodeId] || GENERIC_SERIAL_PORT || 'auto-detected port';
 }
 
 function normalizePriority(raw: unknown): string {
@@ -141,7 +154,7 @@ async function retryTransmission(msgID: number, reason: string): Promise<void> {
   try {
     await writeSerialLine(portState, pending.serialLine);
     console.log('[Cloud -> LoRa] Retrying ' + pending.nodeId + ' to ' + pending.targetNodeId +
-      ' msgID=' + msgID + ' via ' + SERIAL_PORTS[pending.nodeId] + '.');
+      ' msgID=' + msgID + ' via ' + serialPortName(pending.nodeId) + '.');
   } catch (error: any) {
     console.error('[serial ' + pending.nodeId + '] retry write failed for msgID=' + msgID + ':', error?.message || error);
     pending.startedAt = Date.now() - ACK_TIMEOUT_MS - 1;
@@ -197,16 +210,34 @@ async function handleSerialLine(state: GatewayPort, raw: string): Promise<void> 
   if (!packet || typeof packet !== 'object') return;
 
   if (packet.type === 'SYSTEM_EVENT') {
-    if (packet.event === 'NODE_ONLINE') {
+    if (packet.event === 'NODE_ONLINE' && packet.radioReady === true) {
+      const nodeId = nodeFromName(packet.nodeId);
+      if (!nodeId || nodeId === 'DRONE' || !ACTIVE_NODES.includes(nodeId) ||
+          (state.expectedNodeId && state.expectedNodeId !== nodeId)) {
+        void rejectGatewayPort(state, 'Firmware reported an unsupported or unexpected node identity.');
+        return;
+      }
+
+      const existing = gatewayPorts.get(nodeId);
+      if (existing && existing !== state) {
+        void rejectGatewayPort(state, 'Another USB port already owns Team ' + nodeId + '.');
+        return;
+      }
+
+      if (state.validationTimer) clearTimeout(state.validationTimer);
+      state.validationTimer = null;
+      state.nodeId = nodeId;
       state.ready = true;
-      console.log('[serial ' + state.nodeId + '] radio initialized on ' + SERIAL_PORTS[state.nodeId] + '.');
-      await sendCloudEvent({ event: 'heartbeat', nodeId: state.nodeId });
+      gatewayPorts.set(nodeId, state);
+      console.log('[serial ' + nodeId + '] SX1278 radio initialized on ' + state.portName + '.');
+      await sendCloudEvent({ event: 'heartbeat', nodeId });
     } else if (packet.event === 'RADIO_INIT_FAILED') {
-      state.ready = false;
-      console.error('[serial ' + state.nodeId + '] radio initialization failed:', packet.details || 'Unknown hardware error.');
+      void rejectGatewayPort(state, packet.details || 'SX1278 radio initialization failed.');
     }
     return;
   }
+
+  if (!state.ready || !state.nodeId) return;
 
   if (packet.type === 'HEARTBEAT') {
     const nodeId = nodeFromName(packet.from);
@@ -278,12 +309,34 @@ async function handleSerialLine(state: GatewayPort, raw: string): Promise<void> 
   }
 }
 
-function openNodePort(nodeId: NodeId): void {
-  const portName = SERIAL_PORTS[nodeId];
+async function rejectGatewayPort(state: GatewayPort, reason: string): Promise<void> {
+  if (state.validationTimer) clearTimeout(state.validationTimer);
+  state.validationTimer = null;
+  state.ready = false;
+  if (state.nodeId && gatewayPorts.get(state.nodeId) === state) {
+    gatewayPorts.delete(state.nodeId);
+  }
+  state.nodeId = null;
+  rejectedPorts.set(state.portName, Date.now() + 30000);
+  console.warn('[serial] ignored ' + state.portName + ': ' + reason);
+  if (state.port.isOpen) {
+    await new Promise<void>((resolve) => state.port.close(() => resolve()));
+  }
+}
+
+function openNodePort(portName: string, expectedNodeId: NodeId | null): void {
+  if (gatewayPortsByPath.has(portName)) return;
   try {
-    const port = new SerialPort({ path: portName, baudRate: BAUD_RATE });
-    const state: GatewayPort = { nodeId, port, ready: false };
-    gatewayPorts.set(nodeId, state);
+    const port = new SerialPort({ path: portName, baudRate: BAUD_RATE, autoOpen: false });
+    const state: GatewayPort = {
+      nodeId: null,
+      expectedNodeId,
+      portName,
+      port,
+      ready: false,
+      validationTimer: null,
+    };
+    gatewayPortsByPath.set(portName, state);
 
     const parser = port.pipe(new ReadlineParser({ delimiter: '\n' }));
     parser.on('data', (raw: string) => {
@@ -291,35 +344,94 @@ function openNodePort(nodeId: NodeId): void {
     });
 
     port.on('open', () => {
-      console.log('[serial ' + nodeId + '] connected to ' + portName + ' @ ' + BAUD_RATE + '.');
-      // Reboot the station after attaching so its one-time NODE_ONLINE event is not missed.
+      console.log('[serial] probing USB device on ' + portName + ' @ ' + BAUD_RATE + '.');
+      state.validationTimer = setTimeout(() => {
+        if (!state.ready) void rejectGatewayPort(state, 'No LoRa-ready firmware response.');
+      }, 4500);
+
+      // Reboot after attaching so the firmware reports the result of SX1278 initialization.
       port.set({ dtr: false, rts: false }, (lineError) => {
         if (lineError) {
-          console.warn('[serial ' + nodeId + '] could not initialize reset lines:', lineError.message);
+          console.warn('[serial] reset lines unavailable on ' + portName + ':', lineError.message);
           return;
         }
         setTimeout(() => {
           port.set({ rts: true }, (resetError) => {
-            if (resetError) console.warn('[serial ' + nodeId + '] reset pulse failed:', resetError.message);
+            if (resetError) console.warn('[serial] reset pulse failed on ' + portName + ':', resetError.message);
           });
         }, 200);
         setTimeout(() => {
           port.set({ rts: false }, (releaseError) => {
-            if (releaseError) console.warn('[serial ' + nodeId + '] reset release failed:', releaseError.message);
+            if (releaseError) console.warn('[serial] reset release failed on ' + portName + ':', releaseError.message);
           });
         }, 350);
       });
     });
     port.on('close', () => {
+      if (state.validationTimer) clearTimeout(state.validationTimer);
+      state.validationTimer = null;
       state.ready = false;
-      console.error('[serial ' + nodeId + '] ' + portName + ' closed; waiting for gateway restart.');
+      if (state.nodeId && gatewayPorts.get(state.nodeId) === state) {
+        gatewayPorts.delete(state.nodeId);
+      }
+      gatewayPortsByPath.delete(portName);
+      console.log('[serial] USB device removed from ' + portName + '.');
     });
     port.on('error', (error: Error) => {
       state.ready = false;
-      console.error('[serial ' + nodeId + '] ' + portName + ' error:', error.message);
+      console.error('[serial] ' + portName + ' error:', error.message);
+    });
+    port.open((error) => {
+      if (error) {
+        gatewayPortsByPath.delete(portName);
+        rejectedPorts.set(portName, Date.now() + 5000);
+        console.warn('[serial] could not open ' + portName + ':', error.message);
+      }
     });
   } catch (error: any) {
-    console.error('[serial ' + nodeId + '] could not open ' + portName + ':', error?.message || error);
+    gatewayPortsByPath.delete(portName);
+    rejectedPorts.set(portName, Date.now() + 5000);
+    console.warn('[serial] could not probe ' + portName + ':', error?.message || error);
+  }
+}
+
+async function scanSerialPorts(): Promise<void> {
+  if (portScanInProgress) return;
+  portScanInProgress = true;
+  try {
+    const ports = await SerialPort.list();
+    const presentPaths = new Set(ports.map((candidate) => candidate.path));
+    for (const rejectedPath of rejectedPorts.keys()) {
+      if (!presentPaths.has(rejectedPath)) rejectedPorts.delete(rejectedPath);
+    }
+    const expectedByPath = new Map<string, NodeId>();
+    for (const nodeId of ['A', 'B'] as const) {
+      const path = SERIAL_PORTS[nodeId];
+      if (path) expectedByPath.set(path, nodeId);
+    }
+
+    const now = Date.now();
+    const candidates = [...ports].sort((left, right) => {
+      const leftConfigured = expectedByPath.has(left.path) || left.path === GENERIC_SERIAL_PORT;
+      const rightConfigured = expectedByPath.has(right.path) || right.path === GENERIC_SERIAL_PORT;
+      return Number(rightConfigured) - Number(leftConfigured);
+    });
+    for (const candidate of candidates) {
+      const portName = candidate.path;
+      if (gatewayPortsByPath.has(portName)) continue;
+      if ((rejectedPorts.get(portName) || 0) > now) continue;
+
+      const expectedNodeId = expectedByPath.get(portName) || null;
+      const isConfigured = Boolean(expectedNodeId) || portName === GENERIC_SERIAL_PORT;
+      const vendorId = String(candidate.vendorId || '').toLowerCase().replace(/^0x/, '');
+      if (!isConfigured && !ESP_USB_BRIDGE_IDS.has(vendorId)) continue;
+      if (expectedNodeId && !ACTIVE_NODES.includes(expectedNodeId)) continue;
+      openNodePort(portName, expectedNodeId);
+    }
+  } catch (error: any) {
+    console.warn('[serial] USB port scan failed:', error?.message || error);
+  } finally {
+    portScanInProgress = false;
   }
 }
 
@@ -337,7 +449,8 @@ async function pollOutbox(): Promise<void> {
 
   const availableNodes = Array.from(gatewayPorts.values())
     .filter((state) => state.ready && state.port.isOpen)
-    .map((state) => state.nodeId);
+    .map((state) => state.nodeId)
+    .filter((nodeId): nodeId is NodeId => nodeId !== null);
   if (availableNodes.length === 0) return;
 
   outboxPollInProgress = true;
@@ -405,7 +518,7 @@ async function pollOutbox(): Promise<void> {
 
     try {
       await writeSerialLine(state, pending.serialLine);
-      console.log('[Cloud -> LoRa] Dispatched ' + from + ' to ' + to + ' msgID=' + msgID + ' via ' + SERIAL_PORTS[from] + '.');
+      console.log('[Cloud -> LoRa] Dispatched ' + from + ' to ' + to + ' msgID=' + msgID + ' via ' + serialPortName(fromNode) + '.');
     } catch (error: any) {
       console.error('[serial ' + from + '] write failed for msgID=' + msgID + ':', error?.message || error);
       await retryTransmission(msgID, 'serial write failed');
@@ -437,7 +550,7 @@ async function sweepPendingTransmissions(): Promise<void> {
 }
 
 function startGateway(): void {
-  if (ACTIVE_NODES.length === 2 && SERIAL_PORTS.A === SERIAL_PORTS.B) {
+  if (SERIAL_PORTS.A && SERIAL_PORTS.B && SERIAL_PORTS.A === SERIAL_PORTS.B) {
     console.error('[cloud-agent] Team A and Team B cannot share the same serial port.');
     process.exit(1);
   }
@@ -448,16 +561,15 @@ function startGateway(): void {
   console.log('Cloud Server Target : ' + CLOUD_API_URL);
   console.log('Gateway Client ID   : ' + GATEWAY_ID);
   console.log('Gateway Team Mode   : ' + GATEWAY_NODE_MODE);
-  for (const nodeId of ACTIVE_NODES) {
-    console.log('Team ' + nodeId + ' Radio Port   : ' + SERIAL_PORTS[nodeId] + ' @ ' + BAUD_RATE + ' baud');
-  }
-  console.log('');
+  console.log('Serial Port Scan    : enabled (SX1278-ready firmware required)');
+  console.log('Baud Rate           : ' + BAUD_RATE);
 
-  for (const nodeId of ACTIVE_NODES) openNodePort(nodeId);
+  void scanSerialPorts();
+  setInterval(() => void scanSerialPorts(), 1000);
 
   setInterval(() => {
     for (const state of gatewayPorts.values()) {
-      if (state.ready && state.port.isOpen) {
+      if (state.ready && state.nodeId && state.port.isOpen) {
         void sendCloudEvent({ event: 'heartbeat', nodeId: state.nodeId });
       }
     }
@@ -465,7 +577,7 @@ function startGateway(): void {
   setInterval(() => void pollOutbox(), 1200);
   setInterval(() => void sweepPendingTransmissions(), 1000);
 
-  console.log('[cloud-agent] Gateway is listening for both team radios.');
+  console.log('[cloud-agent] Gateway is waiting for Team A/Team B USB LoRa hardware.');
 }
 
 startGateway();
