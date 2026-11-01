@@ -74,8 +74,10 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const handleTestPing = async () => {
     setIsPinging(true);
+    const from = currentUser.role === 'operator' && currentUser.team === 'B' ? 'TEAM_B' : 'TEAM_A';
+    const to = from === 'TEAM_A' ? 'TEAM_B' : 'TEAM_A';
     try {
-      await sendTestPing();
+      await sendTestPing(from, to);
     } catch (err) {
       console.warn('[TopBar] Test ping failed:', err);
     } finally {
