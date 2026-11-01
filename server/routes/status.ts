@@ -38,8 +38,8 @@ router.get('/status', async (_req: Request, res: Response) => {
       uptimeSeconds: Math.floor((Date.now() - BOOT_TIME) / 1000),
     },
     nodes,
-    // Tells login page whether live mode has physical hardware ready (direct USB or remote gateway agent)
-    liveReady: Boolean(serial.connected || nodes['A']?.status === 'online'),
+    // Live mode is ready when either team's USB gateway can carry its own outbound messages.
+    liveReady: Boolean(serial.connected || nodes['A']?.status === 'online' || nodes['B']?.status === 'online'),
     updatedAt: new Date().toISOString(),
   });
 });

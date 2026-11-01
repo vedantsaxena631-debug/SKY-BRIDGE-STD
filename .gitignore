@@ -2,6 +2,7 @@ node_modules/
 build/
 dist/
 coverage/
+firmware/.pio/
 .DS_Store
 *.log
 .env*

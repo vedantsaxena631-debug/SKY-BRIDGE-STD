@@ -32,7 +32,7 @@ export class SerialService extends EventEmitter {
   public stats = { linesRead: 0, linesParsed: 0, linesDropped: 0, messagesWritten: 0 };
 
   // Protocol autodetection & ASCII block parser state
-  public detectedProtocol: 'JSON' | 'SB1_ASCII' = 'SB1_ASCII';
+  public detectedProtocol: 'JSON' | 'SB1_ASCII' = 'JSON';
   private _asciiBlock: Record<string, string> = {};
   private _currentBlockType: string = 'NONE';
   private _pendingOutboxMap = new Map<number, { packet: any; sentAt: number }>();
@@ -422,7 +422,7 @@ export class SerialService extends EventEmitter {
     if (p.type === 'MSG') {
       if (typeof p.msgID !== 'number') return false;
       if (typeof p.payload !== 'string' || p.payload.length === 0) return false;
-      if (Buffer.byteLength(p.payload, 'utf8') > 200) return false;
+      if (Buffer.byteLength(p.payload, 'utf8') > 179) return false;
     }
     if (p.type === 'ACK' && typeof p.msgID !== 'number') return false;
     return true;

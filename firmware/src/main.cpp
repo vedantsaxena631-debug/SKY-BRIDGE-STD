@@ -55,7 +55,7 @@ void loop() {
   SkyMessage hostCmd;
   if (serialBridge.checkIncoming(hostCmd)) {
     // Send host-originated message over the air
-    triggerGroundNodeSend(hostCmd.payload, hostCmd.priority);
+    triggerGroundNodeSend(hostCmd);
   }
 #endif
 

@@ -5,14 +5,13 @@ import { serialService } from '../services/serialService';
 import { Device } from '../models/Device';
 import { generateCorrelationId, logTrace } from '../utils/trace';
 
-// The Team A board is the only way a live message reaches the radio network.
-// It counts as connected when this server has its USB port, or the laptop gateway sent a heartbeat recently.
-async function gatewayIsOnline(): Promise<boolean> {
+// A web-originated packet must leave through the USB board for its sending team.
+async function gatewayIsOnline(nodeId: 'A' | 'B'): Promise<boolean> {
   const timeout = Number(process.env.HEARTBEAT_TIMEOUT_MS || 20000);
-  const rows: any[] = await Device.find({ deviceId: 'A', isDemo: false });
-  const a = rows[0];
+  const rows: any[] = await Device.find({ deviceId: nodeId, isDemo: false });
+  const node = rows[0];
   return Boolean(
-    a && a.status === 'online' && a.lastSeen && Date.now() - new Date(a.lastSeen).getTime() < timeout
+    node && node.status === 'online' && node.lastSeen && Date.now() - new Date(node.lastSeen).getTime() < timeout
   );
 }
 
@@ -59,9 +58,9 @@ router.post(
     }
 
     const payloadBytes = Buffer.byteLength(payload, 'utf8');
-    if (payloadBytes > 200) {
+    if (payloadBytes > 179) {
       return res.status(400).json({
-        error: `Payload size (${payloadBytes} bytes) exceeds maximum LoRa transmission limit of 200 bytes.`,
+        error: `Payload size (${payloadBytes} bytes) exceeds maximum LoRa transmission limit of 179 bytes.`,
         code: 'PAYLOAD_TOO_LARGE',
         bytes: payloadBytes,
       });
@@ -100,7 +99,7 @@ router.post(
     let status = isDemo ? 'sent_to_bridge' : 'queued';
 
     if (!isDemo) {
-      if (serialService.connected) {
+      if (from === 'A' && to === 'B' && serialService.connected) {
         try {
           await serialService.send({
             from,
@@ -119,11 +118,11 @@ router.post(
             code: 'SERIAL_SEND_FAILED',
           });
         }
-      } else if (await gatewayIsOnline()) {
+      } else if ((from === 'A' || from === 'B') && await gatewayIsOnline(from)) {
         logTrace(correlationId, 'gateway.queue', `msgID=${msgID} bytes=${payloadBytes}`);
       } else {
         return res.status(503).json({
-          error: 'Team A board is offline. Message not sent. Plug in the Team A board and start the gateway.',
+          error: `Team ${from} board is offline. Message not sent. Connect that team's radio and start the gateway.`,
           code: 'GATEWAY_OFFLINE',
         });
       }

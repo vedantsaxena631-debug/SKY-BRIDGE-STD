@@ -8,5 +8,6 @@ void initGroundNode();
 void updateGroundNode();
 void handleGroundNodeIncoming(const SkyMessage& msg);
 void triggerGroundNodeSend(const char* payload, const char* priority = "ROUTINE");
+void triggerGroundNodeSend(const SkyMessage& hostCommand);
 
 #endif // ROLE_GROUND_NODE_H

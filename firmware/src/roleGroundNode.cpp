@@ -27,6 +27,15 @@ static uint8_t currentPresetIdx = 0;
 static uint32_t awaitingAckMsgID = 0;
 static unsigned long ackSentTime = 0;
 static bool waitingForAck = false;
+static uint32_t localMsgCounter = (THIS_NODE_ROLE == NODE_ROLE_A) ? 0x10000000UL : 0x20000000UL;
+static const uint8_t RECEIVED_MSG_CACHE_CAPACITY = 25;
+struct ReceivedMessageKey {
+  uint32_t msgID;
+  char from[16];
+};
+static ReceivedMessageKey recentIncomingMessages[RECEIVED_MSG_CACHE_CAPACITY] = {};
+static uint8_t recentIncomingCount = 0;
+static uint8_t recentIncomingIndex = 0;
 
 // Last status message for OLED
 static String lastStatusText = "STANDBY / READY";
@@ -37,6 +46,11 @@ static String lastMessageSender = "-";
 static void refreshOled();
 static void soundBuzzer(const char* priority);
 static float readBatteryVoltage();
+static bool transmitGroundNodeMessage(const SkyMessage& outgoing, bool echoToUsb);
+static void emitHostCommandStatus(uint32_t msgID, const char* status);
+static bool alreadyReceivedMessage(const SkyMessage& msg);
+static void rememberReceivedMessage(const SkyMessage& msg);
+static void transmitIncomingAck(const SkyMessage& msg);
 
 void initGroundNode() {
   pinMode(BUZZER_PIN, OUTPUT);
@@ -70,23 +84,64 @@ void initGroundNode() {
 }
 
 void triggerGroundNodeSend(const char* payload, const char* priority) {
-  static uint32_t localMsgCounter = (THIS_NODE_ROLE == NODE_ROLE_A) ? 100 : 500;
-  localMsgCounter++;
+  if (waitingForAck) {
+    lastStatusText = "BUSY - WAIT ACK";
+    refreshOled();
+    return;
+  }
 
   SkyMessage outgoing;
   strlcpy(outgoing.from, NODE_CALLSIGN, sizeof(outgoing.from));
   strlcpy(outgoing.to, (THIS_NODE_ROLE == NODE_ROLE_A) ? "TEAM_B" : "TEAM_A", sizeof(outgoing.to));
-  outgoing.msgID = localMsgCounter;
+  outgoing.msgID = ++localMsgCounter;
   strlcpy(outgoing.payload, payload, sizeof(outgoing.payload));
   strlcpy(outgoing.priority, priority, sizeof(outgoing.priority));
   outgoing.relayCount = 0;
   strlcpy(outgoing.type, "MSG", sizeof(outgoing.type));
   outgoing.rssi = 0;
 
-  // Mark in local loop prevention so we don't process our own echo
+  transmitGroundNodeMessage(outgoing, true);
+}
+
+void triggerGroundNodeSend(const SkyMessage& hostCommand) {
+  const char* expectedTo = (THIS_NODE_ROLE == NODE_ROLE_A) ? "TEAM_B" : "TEAM_A";
+  const bool supportedType = strcmp(hostCommand.type, "MSG") == 0 || strcmp(hostCommand.type, "PING") == 0;
+
+  if (waitingForAck) {
+    emitHostCommandStatus(hostCommand.msgID, "HOST_CMD_BUSY");
+    lastStatusText = "BUSY - WAIT ACK";
+    refreshOled();
+    return;
+  }
+
+  if (!supportedType || hostCommand.msgID == 0 || hostCommand.payload[0] == '\0' ||
+      strcmp(hostCommand.from, NODE_CALLSIGN) != 0 || strcmp(hostCommand.to, expectedTo) != 0) {
+    emitHostCommandStatus(hostCommand.msgID, "HOST_CMD_REJECTED");
+    return;
+  }
+
+  SkyMessage outgoing = hostCommand;
+  strlcpy(outgoing.type, "MSG", sizeof(outgoing.type));
+  outgoing.relayCount = 0;
+  outgoing.rssi = 0;
+
+  if (strcmp(outgoing.priority, "CRITICAL") == 0 || strcmp(outgoing.priority, "EMERGENCY") == 0) {
+    strlcpy(outgoing.priority, "CRITICAL", sizeof(outgoing.priority));
+  } else if (strcmp(outgoing.priority, "URGENT") == 0) {
+    strlcpy(outgoing.priority, "URGENT", sizeof(outgoing.priority));
+  } else {
+    strlcpy(outgoing.priority, "ROUTINE", sizeof(outgoing.priority));
+  }
+
+  if (!transmitGroundNodeMessage(outgoing, false)) {
+    emitHostCommandStatus(hostCommand.msgID, "RADIO_TX_FAILED");
+  }
+}
+
+static bool transmitGroundNodeMessage(const SkyMessage& outgoing, bool echoToUsb) {
+  // Suppress an immediate radio echo of this packet.
   loopFilter.markSeen(outgoing.msgID);
 
-  // Transmit over radio
   lastStatusText = "TRANSMITTING...";
   refreshOled();
 
@@ -97,15 +152,80 @@ void triggerGroundNodeSend(const char* payload, const char* priority) {
     ackSentTime = millis();
     lastStatusText = "SENT - AWAIT ACK";
 
-    // Also mirror to USB serial if tethered to PC
-    serialBridge.emit(outgoing);
+    // Button-originated messages need to be recorded by the connected gateway.
+    // Web-originated messages already exist in the cloud and must not be duplicated.
+    if (echoToUsb) serialBridge.emit(outgoing);
   } else {
     lastStatusText = "TX FAILED (RADIO)";
   }
   refreshOled();
+  return success;
+}
+
+static void emitHostCommandStatus(uint32_t msgID, const char* status) {
+  SkyMessage result;
+  strlcpy(result.from, NODE_CALLSIGN, sizeof(result.from));
+  strlcpy(result.to, "HOST", sizeof(result.to));
+  result.msgID = msgID;
+  strlcpy(result.payload, status, sizeof(result.payload));
+  strlcpy(result.priority, "URGENT", sizeof(result.priority));
+  result.relayCount = 0;
+  strlcpy(result.type, "STATUS", sizeof(result.type));
+  result.rssi = 0;
+  serialBridge.emit(result);
+}
+
+static bool alreadyReceivedMessage(const SkyMessage& msg) {
+  if (msg.msgID == 0) return false;
+  for (uint8_t i = 0; i < recentIncomingCount; i++) {
+    if (recentIncomingMessages[i].msgID == msg.msgID &&
+        strcmp(recentIncomingMessages[i].from, msg.from) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void rememberReceivedMessage(const SkyMessage& msg) {
+  if (msg.msgID == 0) return;
+  ReceivedMessageKey& entry = recentIncomingMessages[recentIncomingIndex];
+  entry.msgID = msg.msgID;
+  strlcpy(entry.from, msg.from, sizeof(entry.from));
+  recentIncomingIndex = (recentIncomingIndex + 1) % RECEIVED_MSG_CACHE_CAPACITY;
+  if (recentIncomingCount < RECEIVED_MSG_CACHE_CAPACITY) recentIncomingCount++;
+}
+
+static void transmitIncomingAck(const SkyMessage& msg) {
+  SkyMessage ackPkt;
+  strlcpy(ackPkt.from, NODE_CALLSIGN, sizeof(ackPkt.from));
+  strlcpy(ackPkt.to, msg.from, sizeof(ackPkt.to));
+  ackPkt.msgID = msg.msgID;
+  strlcpy(ackPkt.payload, "ACK", sizeof(ackPkt.payload));
+  strlcpy(ackPkt.priority, "ROUTINE", sizeof(ackPkt.priority));
+  ackPkt.relayCount = 0;
+  strlcpy(ackPkt.type, "ACK", sizeof(ackPkt.type));
+  ackPkt.rssi = 0;
+
+  delay(100);
+  if (radio.transmit(ackPkt)) {
+    serialBridge.emit(ackPkt);
+  } else {
+    emitHostCommandStatus(msg.msgID, "RADIO_ACK_TX_FAILED");
+  }
 }
 
 void handleGroundNodeIncoming(const SkyMessage& msg) {
+  const bool addressedMessage = strcmp(msg.type, "MSG") == 0 &&
+      (strcmp(msg.to, NODE_CALLSIGN) == 0 || strcmp(msg.to, "BROADCAST") == 0);
+
+  // A sender may retry if its ACK was lost. Re-ACK duplicates without displaying
+  // the message twice or producing duplicate cloud receive events.
+  if (addressedMessage && alreadyReceivedMessage(msg)) {
+    transmitIncomingAck(msg);
+    return;
+  }
+  if (addressedMessage) rememberReceivedMessage(msg);
+
   // Always emit to serial so the connected laptop overhears/records it
   serialBridge.emit(msg);
 
@@ -129,8 +249,7 @@ void handleGroundNodeIncoming(const SkyMessage& msg) {
   }
 
   // If this packet is an incoming message addressed to us (or BROADCAST)
-  if (strcmp(msg.type, "MSG") == 0 &&
-      (strcmp(msg.to, NODE_CALLSIGN) == 0 || strcmp(msg.to, "BROADCAST") == 0)) {
+  if (addressedMessage) {
     
     lastMessageSender = msg.from;
     lastMessagePayload = msg.payload;
@@ -140,20 +259,9 @@ void handleGroundNodeIncoming(const SkyMessage& msg) {
     // Audible alert based on priority
     soundBuzzer(msg.priority);
 
-    // Immediately transmit return ACK
-    SkyMessage ackPkt;
-    strlcpy(ackPkt.from, NODE_CALLSIGN, sizeof(ackPkt.from));
-    strlcpy(ackPkt.to, msg.from, sizeof(ackPkt.to));
-    ackPkt.msgID = msg.msgID; // Reuse same msgID so sender knows what is acked
-    strlcpy(ackPkt.payload, "ACK", sizeof(ackPkt.payload));
-    strlcpy(ackPkt.priority, "ROUTINE", sizeof(ackPkt.priority));
-    ackPkt.relayCount = 0;
-    strlcpy(ackPkt.type, "ACK", sizeof(ackPkt.type));
-    ackPkt.rssi = 0;
-
-    delay(100); // Tiny pause before returning ACK
-    radio.transmit(ackPkt);
-    serialBridge.emit(ackPkt);
+    // Immediately transmit return ACK. Only report delivery to USB when LoRa
+    // accepted the ACK packet; retries will make the receiver replay it if needed.
+    transmitIncomingAck(msg);
   }
 }
 

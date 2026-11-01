@@ -19,7 +19,15 @@ router.get('/outbox', async (req: Request, res: Response) => {
       });
     }
 
-    const message = await Message.claimNextQueued(gatewayId, 30000);
+    const nodesParam = String(req.query.nodes || '').trim();
+    const sourceNodes = nodesParam ? nodesParam.split(',').map((node) => node.trim()) : undefined;
+    if (sourceNodes?.some((node) => node !== 'A' && node !== 'B')) {
+      return res.status(400).json({
+        error: 'Outbox nodes must be A and/or B.',
+      });
+    }
+
+    const message = await Message.claimNextQueued(gatewayId, 30000, sourceNodes);
     if (!message) {
       return res.json({ message: null });
     }
@@ -121,7 +129,7 @@ router.post('/events', async (req: Request, res: Response) => {
         from === to ||
         typeof payload !== 'string' ||
         !payload.trim() ||
-        Buffer.byteLength(payload, 'utf8') > 200
+        Buffer.byteLength(payload, 'utf8') > 179
       ) {
         return res.status(400).json({
           error: 'Invalid received message.',

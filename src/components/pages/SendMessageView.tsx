@@ -17,7 +17,7 @@ import {
   Info,
 } from 'lucide-react';
 
-const MAX_PAYLOAD_BYTES = 220; // Physical LoRa SX1278 buffer limit
+const MAX_PAYLOAD_BYTES = 179; // Firmware stores the payload in a 180-byte C buffer including the terminator
 
 export const SendMessageView: React.FC = () => {
   const auth = useAuth();

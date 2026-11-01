@@ -35,7 +35,7 @@ export const MessageSchema = new Schema<IMessageDoc>(
     msgID: { type: Number, required: true },
     from: { type: String, required: true, enum: ['A', 'B', 'DRONE'] },
     to: { type: String, required: true, enum: ['A', 'B', 'DRONE'] },
-    payload: { type: String, required: true, maxlength: 200 },
+    payload: { type: String, required: true, maxlength: 179 },
     type: { type: String, default: 'MSG', enum: ['MSG', 'ACK', 'HEARTBEAT', 'PING', 'STATUS'] },
     priority: { type: String, default: 'routine', enum: ['routine', 'urgent', 'emergency', 'critical', 'ROUTINE', 'URGENT', 'CRITICAL', 'EMERGENCY', 'NORMAL', 'normal'] },
     status: {
@@ -113,7 +113,7 @@ class MemoryMessageStore {
     ];
   }
 
-  async claimNextQueued(gatewayId: string, leaseMs = 30000): Promise<any | null> {
+  async claimNextQueued(gatewayId: string, leaseMs = 30000, senderNodes?: string[]): Promise<any | null> {
     const now = new Date();
     const leaseUntil = new Date(now.getTime() + leaseMs);
 
@@ -123,6 +123,7 @@ class MemoryMessageStore {
         {
           isDemo: false,
           status: 'queued',
+          ...(senderNodes?.length ? { from: { $in: senderNodes } } : {}),
           $or: [
             { leaseUntil: null },
             { leaseUntil: { $exists: false } },
@@ -150,6 +151,7 @@ class MemoryMessageStore {
       if (message.isDemo !== false || message.status !== 'queued') {
         return false;
       }
+      if (senderNodes?.length && !senderNodes.includes(message.from)) return false;
 
       return (
         !message.leaseUntil ||
