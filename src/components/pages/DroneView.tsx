@@ -13,8 +13,11 @@ import {
 } from 'lucide-react';
 
 export const DroneView: React.FC = () => {
-  const { messages } = useApp();
+  const { messages, devices } = useApp();
   const relayedPackets = messages.filter((m) => m.relayCount > 0);
+  const droneNode = devices.find((device) => device.id === 'DRONE_RELAY' || device.id === 'DRONE');
+  const droneOnline = droneNode?.status === 'ONLINE';
+  const droneStatus = droneNode?.status || 'UNKNOWN';
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -32,11 +35,38 @@ export const DroneView: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 text-xs font-mono text-cyan-300 bg-cyan-950/60 px-3 py-1.5 rounded-lg border border-cyan-500/40">
-          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-          <span>RELAY STATE: ACTIVE</span>
+        <div className={`flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded-lg border ${droneOnline ? 'text-emerald-300 bg-emerald-950/40 border-emerald-500/40' : 'text-amber-300 bg-amber-950/30 border-amber-500/30'}`}>
+          <span className={`w-2 h-2 rounded-full ${droneOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+          <span>DRONE NODE: {droneStatus}</span>
         </div>
       </div>
+
+      <section className="bg-slate-900/80 border border-slate-800 rounded-xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-sm font-bold text-slate-100 font-mono">FOUR-BUTTON DRONE ALERT PANEL</h2>
+            <p className="text-xs text-slate-400 mt-1">Each press broadcasts a LoRa alert and logs it to the live network.</p>
+          </div>
+          <span className="text-[10px] text-cyan-300 font-mono border border-cyan-900 rounded px-2 py-1">SX1278 READY REQUIRED</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {[
+            { pin: 'GPIO 32', message: 'VICTIM DETECTED', priority: 'CRITICAL' },
+            { pin: 'GPIO 33', message: 'MEDICAL ASSISTANCE REQUIRED', priority: 'URGENT' },
+            { pin: 'GPIO 25', message: 'EXTRACTION REQUIRED', priority: 'URGENT' },
+            { pin: 'GPIO 27', message: 'AREA SECURE', priority: 'ROUTINE' },
+          ].map((button, index) => (
+            <div key={button.pin} className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-slate-200">BUTTON {index + 1}</span>
+                <span className="text-[10px] text-slate-500 font-mono">{button.pin}</span>
+              </div>
+              <div className="text-xs text-cyan-300 font-mono">{button.message}</div>
+              <div className="text-[10px] text-slate-500 mt-1">{button.priority} · broadcast</div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       {/* Critical System Warning Banner (Section 2 & 23 Ground Truth) */}
       <div className="bg-slate-900 border-l-4 border-cyan-500 p-4 rounded-xl border border-slate-800 shadow-md">

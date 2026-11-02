@@ -1,13 +1,13 @@
 /**
- * Bridges both USB-connected ESP32 LoRa stations to the live SkyBridge API.
- * Team A and Team B use the same newline-delimited JSON protocol as firmware.
+ * Bridges any USB-connected ESP32 LoRa node to the live SkyBridge API.
+ * Firmware identity is accepted only after SX1278 initialization succeeds.
  */
 import 'dotenv/config';
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
 
-type NodeId = 'A' | 'B';
-type NetworkNodeId = NodeId | 'DRONE';
+type NodeId = string;
+type NetworkNodeId = string;
 type PendingState = 'awaiting_ack' | 'busy_wait' | 'ack_pending' | 'failure_pending';
 type GatewayNodeMode = NodeId | 'BOTH';
 
@@ -36,16 +36,24 @@ const CLOUD_API_URL = (process.env.CLOUD_API_URL || 'http://localhost:3000/api/v
 const GATEWAY_SECRET = process.env.GATEWAY_SECRET || 'skybridge-gateway-secret-token-2026';
 const GATEWAY_ID = process.env.GATEWAY_ID || 'gateway_' + (process.env.COMPUTERNAME || 'laptop');
 const BAUD_RATE = Number(process.env.SERIAL_BAUD_RATE || 115200);
-const configuredNodeMode = (process.env.GATEWAY_NODE || 'BOTH').toUpperCase();
-if (configuredNodeMode !== 'A' && configuredNodeMode !== 'B' && configuredNodeMode !== 'BOTH') {
-  throw new Error('GATEWAY_NODE must be A, B, or BOTH.');
+const configuredNodeMode = (process.env.GATEWAY_NODE || 'BOTH').trim().toUpperCase();
+const isValidNodeId = (value: string): boolean => /^[A-Z0-9_-]{1,15}$/.test(value);
+if (configuredNodeMode !== 'BOTH' && !isValidNodeId(configuredNodeMode)) {
+  throw new Error('GATEWAY_NODE must be BOTH or a valid node ID.');
 }
 const GATEWAY_NODE_MODE = configuredNodeMode as GatewayNodeMode;
-const ACTIVE_NODES: NodeId[] = GATEWAY_NODE_MODE === 'BOTH' ? ['A', 'B'] : [GATEWAY_NODE_MODE];
-const SERIAL_PORTS: Partial<Record<NodeId, string>> = {
+const SERIAL_PORTS: Record<NodeId, string> = {
+  ...(process.env.SERIAL_PORT_DRONE?.trim() ? { DRONE: process.env.SERIAL_PORT_DRONE.trim() } : {}),
   A: process.env.SERIAL_PORT_A?.trim() || undefined,
   B: process.env.SERIAL_PORT_B?.trim() || undefined,
-};
+} as Record<NodeId, string>;
+for (const pair of (process.env.SERIAL_PORT_MAP || '').split(',')) {
+  const separator = pair.indexOf('=');
+  if (separator < 0) continue;
+  const nodeId = pair.slice(0, separator).trim().toUpperCase();
+  const portPath = pair.slice(separator + 1).trim();
+  if (isValidNodeId(nodeId) && portPath) SERIAL_PORTS[nodeId] = portPath;
+}
 const GENERIC_SERIAL_PORT = process.env.SERIAL_PORT?.trim() || '';
 const ESP_USB_BRIDGE_IDS = new Set(['303a', '10c4', '1a86', '0403', '067b']);
 const MAX_PAYLOAD_BYTES = 179;
@@ -64,14 +72,23 @@ let portScanInProgress = false;
 let outboxWarned = false;
 
 function nodeFromName(raw: unknown): NetworkNodeId | null {
-  const tokens = String(raw ?? '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  const value = String(raw ?? '').trim().toUpperCase();
+  if (!value) return null;
+  const tokens = value.split(/[^A-Z0-9]+/).filter(Boolean);
   if (tokens.some((token) => token === 'DRONE' || token === 'RELAY' || token === 'REPEATER')) return 'DRONE';
   const last = tokens[tokens.length - 1];
-  return last === 'A' || last === 'B' ? last : null;
+  if (last === 'A' || last === 'B') return last;
+  if (tokens[0] === 'TEAM' && tokens.length > 1) return tokens.slice(1).join('_').slice(0, 15);
+  const normalized = value.replace(/[^A-Z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  return isValidNodeId(normalized) ? normalized : null;
+}
+
+function isNodeActive(nodeId: NodeId): boolean {
+  return GATEWAY_NODE_MODE === 'BOTH' || GATEWAY_NODE_MODE === nodeId;
 }
 
 function callsign(nodeId: NodeId): string {
-  return 'TEAM_' + nodeId;
+  return nodeId === 'A' || nodeId === 'B' ? 'TEAM_' + nodeId : nodeId;
 }
 
 function serialPortName(nodeId: NodeId): string {
@@ -212,7 +229,7 @@ async function handleSerialLine(state: GatewayPort, raw: string): Promise<void> 
   if (packet.type === 'SYSTEM_EVENT') {
     if (packet.event === 'NODE_ONLINE' && packet.radioReady === true) {
       const nodeId = nodeFromName(packet.nodeId);
-      if (!nodeId || nodeId === 'DRONE' || !ACTIVE_NODES.includes(nodeId) ||
+      if (!nodeId || !isNodeActive(nodeId) ||
           (state.expectedNodeId && state.expectedNodeId !== nodeId)) {
         void rejectGatewayPort(state, 'Firmware reported an unsupported or unexpected node identity.');
         return;
@@ -247,7 +264,7 @@ async function handleSerialLine(state: GatewayPort, raw: string): Promise<void> 
 
   if (packet.type === 'MSG') {
     const from = nodeFromName(packet.from);
-    const to = nodeFromName(packet.to);
+    const to = packet.to === 'BROADCAST' ? 'BROADCAST' : nodeFromName(packet.to);
     const msgID = Number(packet.msgID);
     if (!from || !to || from === to || !Number.isSafeInteger(msgID) || msgID <= 0 ||
         typeof packet.payload !== 'string' || !packet.payload.trim() ||
@@ -262,6 +279,7 @@ async function handleSerialLine(state: GatewayPort, raw: string): Promise<void> 
       from,
       to,
       payload: packet.payload,
+      priority: normalizePriority(packet.priority),
       msgID,
     });
     return;
@@ -405,8 +423,7 @@ async function scanSerialPorts(): Promise<void> {
       if (!presentPaths.has(rejectedPath)) rejectedPorts.delete(rejectedPath);
     }
     const expectedByPath = new Map<string, NodeId>();
-    for (const nodeId of ['A', 'B'] as const) {
-      const path = SERIAL_PORTS[nodeId];
+    for (const [nodeId, path] of Object.entries(SERIAL_PORTS)) {
       if (path) expectedByPath.set(path, nodeId);
     }
 
@@ -425,7 +442,7 @@ async function scanSerialPorts(): Promise<void> {
       const isConfigured = Boolean(expectedNodeId) || portName === GENERIC_SERIAL_PORT;
       const vendorId = String(candidate.vendorId || '').toLowerCase().replace(/^0x/, '');
       if (!isConfigured && !ESP_USB_BRIDGE_IDS.has(vendorId)) continue;
-      if (expectedNodeId && !ACTIVE_NODES.includes(expectedNodeId)) continue;
+      if (expectedNodeId && !isNodeActive(expectedNodeId)) continue;
       openNodePort(portName, expectedNodeId);
     }
   } catch (error: any) {
@@ -475,8 +492,8 @@ async function pollOutbox(): Promise<void> {
 
     const from = nodeFromName(message.from);
     const to = nodeFromName(message.to);
-    const fromNode: NodeId | null = from === 'A' || from === 'B' ? from : null;
-    const toNode: NodeId | null = to === 'A' || to === 'B' ? to : null;
+    const fromNode: NodeId | null = from;
+    const toNode: NodeId | null = to === 'BROADCAST' ? null : to;
     const msgID = Number(message.msgID);
     const state = fromNode ? gatewayPorts.get(fromNode) : undefined;
 
@@ -556,7 +573,7 @@ function startGateway(): void {
   }
 
   console.log('\n============================================================');
-  console.log('      SKYBRIDGE TWO-TEAM CLOUD-TO-HARDWARE GATEWAY          ');
+  console.log('      SKYBRIDGE MULTI-NODE CLOUD-TO-HARDWARE GATEWAY       ');
   console.log('============================================================\n');
   console.log('Cloud Server Target : ' + CLOUD_API_URL);
   console.log('Gateway Client ID   : ' + GATEWAY_ID);
@@ -577,7 +594,7 @@ function startGateway(): void {
   setInterval(() => void pollOutbox(), 1200);
   setInterval(() => void sweepPendingTransmissions(), 1000);
 
-  console.log('[cloud-agent] Gateway is waiting for Team A/Team B USB LoRa hardware.');
+  console.log('[cloud-agent] Gateway scans for authenticated LoRa-ready USB nodes.');
 }
 
 startGateway();

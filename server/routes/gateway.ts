@@ -5,8 +5,16 @@ import { Device } from '../models/Device';
 import { serialService } from '../services/serialService';
 
 const router = Router();
-const VALID_NODES = ['A', 'B', 'DRONE'];
-
+const isValidNodeId = (value: unknown): value is string =>
+typeof value === 'string' && /^[A-Z0-9_-]{1,15}$/.test(value);
+
+const roleForNode = (nodeId: string): string => {
+  if (nodeId === 'A') return 'Team A Station';
+  if (nodeId === 'B') return 'Team B Station';
+  if (nodeId === 'DRONE') return 'Drone Alert Relay Node';
+  return `LoRa Node ${nodeId}`;
+};
+
 router.use(requireGatewaySecret);
 
 // GET /api/v1/gateway/outbox - Remote laptop gateway claims next queued message
@@ -21,9 +29,9 @@ router.get('/outbox', async (req: Request, res: Response) => {
 
     const nodesParam = String(req.query.nodes || '').trim();
     const sourceNodes = nodesParam ? nodesParam.split(',').map((node) => node.trim()) : undefined;
-    if (sourceNodes?.some((node) => node !== 'A' && node !== 'B')) {
+    if (sourceNodes?.some((node) => !isValidNodeId(node))) {
       return res.status(400).json({
-        error: 'Outbox nodes must be A and/or B.',
+        error: 'Outbox node IDs must be valid node identifiers.',
       });
     }
 
@@ -62,6 +70,7 @@ router.post('/events', async (req: Request, res: Response) => {
       from,
       to,
       payload,
+      priority,
     } = req.body;
 
     if (
@@ -76,13 +85,13 @@ router.post('/events', async (req: Request, res: Response) => {
 
     // 1. DEVICE HEARTBEAT
     if (event === 'heartbeat') {
-      if (!VALID_NODES.includes(nodeId)) {
+      if (!isValidNodeId(nodeId)) {
         return res.status(400).json({
           error: 'Invalid nodeId.',
         });
       }
 
-      const roleName = nodeId === 'DRONE' ? 'Drone Relay' : `Team ${nodeId} Station`;
+      const roleName = roleForNode(nodeId);
       const device = await Device.findOneAndUpdate(
         {
           deviceId: nodeId,
@@ -124,8 +133,8 @@ router.post('/events', async (req: Request, res: Response) => {
     // 2. INCOMING HARDWARE MESSAGE (Over-The-Air from Team B or Drone)
     if (event === 'received') {
       if (
-        !VALID_NODES.includes(from) ||
-        !VALID_NODES.includes(to) ||
+        !isValidNodeId(from) ||
+        !(to === 'BROADCAST' || isValidNodeId(to)) ||
         from === to ||
         typeof payload !== 'string' ||
         !payload.trim() ||
@@ -169,7 +178,8 @@ router.post('/events', async (req: Request, res: Response) => {
         to,
         payload,
         type: 'MSG',
-        priority: 'routine',
+        priority: ['critical', 'urgent', 'emergency'].includes(String(priority || '').toLowerCase())
+          ? String(priority).toLowerCase() : 'routine',
         status: 'relayed',
         source: 'hardware',
         relayCount: 1,

@@ -1,9 +1,25 @@
-import { serialService } from '../server/services/serialService';
+import { nodeFromName, serialService } from '../server/services/serialService';
 import { Message } from '../server/models/Message';
 import { Device } from '../server/models/Device';
 
 export async function runSerialParsingTests(): Promise<void> {
   console.log('\n  Suite: Hardware Serial Ingestion & Parsing');
+
+  if (nodeFromName('TEAM_A') !== 'A' || nodeFromName('DRONE') !== 'DRONE' ||
+      nodeFromName('NODE_3') !== 'NODE_3' || nodeFromName('TEAM_C') !== 'C') {
+    throw new Error('Known and extensible node IDs were not normalized correctly.');
+  }
+  const droneBroadcast = {
+    type: 'MSG',
+    from: 'DRONE',
+    to: 'BROADCAST',
+    msgID: 7688,
+    payload: 'VICTIM DETECTED',
+  };
+  if (!(serialService as any)._isValidPacket(droneBroadcast)) {
+    throw new Error('Drone broadcast alert was rejected by the serial protocol validator.');
+  }
+  console.log('    ✓ accepts dynamic node IDs and drone broadcast alerts');
 
   // Unverified serial traffic must not create messages or mark a node online.
   serialService.verifiedNodeId = null;

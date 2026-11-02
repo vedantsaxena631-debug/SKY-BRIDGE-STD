@@ -38,7 +38,7 @@ export const DevicesView: React.FC = () => {
             </h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Physical device profiles for Ground Nodes (Team A / Team B) and Airborne LoRa Repeater.
+            Live inventory of every LoRa-ready node registered by the hardware gateway.
           </p>
         </div>
 

@@ -10,23 +10,29 @@ const BOOT_TIME = Date.now();
 
 // 1. GET /api/v1/status - Pre-login system status
 router.get('/status', async (_req: Request, res: Response) => {
-  const nodes: Record<string, { status: string; lastSeen: any }> = {};
+  const nodes: Record<string, { status: string; lastSeen: any; role?: string | null }> = {};
   const isDbUp = isDbConnected();
   const heartbeatTimeout = Number(process.env.HEARTBEAT_TIMEOUT_MS || 20000);
 
   try {
     const devices = await Device.find({ isDemo: false }).select('deviceId status lastSeen role').lean();
-    for (const id of ['A', 'DRONE', 'B']) {
-      const d = (devices as any[]).find((x: any) => x.deviceId === id);
+    for (const d of devices as any[]) {
+      const id = String(d.deviceId || '').trim().toUpperCase();
+      if (!id) continue;
       const lastSeen = d?.lastSeen ? new Date(d.lastSeen) : null;
       const isFresh = Boolean(lastSeen && Date.now() - lastSeen.getTime() < heartbeatTimeout);
-      nodes[id] = d
-        ? { status: d.status === 'online' && !isFresh ? 'offline' : d.status, lastSeen: d.lastSeen }
-        : { status: 'unknown', lastSeen: null };
+      nodes[id] = {
+        status: d.status === 'online' && !isFresh ? 'offline' : d.status,
+        lastSeen: d.lastSeen,
+        role: d.role || null,
+      };
+    }
+    for (const id of ['A', 'DRONE', 'B']) {
+      if (!nodes[id]) nodes[id] = { status: 'unknown', lastSeen: null, role: null };
     }
   } catch {
     for (const id of ['A', 'DRONE', 'B']) {
-      nodes[id] = { status: 'unknown', lastSeen: null };
+      nodes[id] = { status: 'unknown', lastSeen: null, role: null };
     }
   }
 
@@ -42,7 +48,7 @@ router.get('/status', async (_req: Request, res: Response) => {
     },
     nodes,
     // Live mode is ready when either team's USB gateway can carry its own outbound messages.
-    liveReady: Boolean(serial.connected || nodes['A']?.status === 'online' || nodes['B']?.status === 'online'),
+    liveReady: Boolean(serial.connected || Object.values(nodes).some((node) => node.status === 'online')),
     updatedAt: new Date().toISOString(),
   });
 });

@@ -4,7 +4,6 @@ import { Device } from '../models/Device';
 import { SystemEvent } from '../models/SystemEvent';
 import { generateCorrelationId, logTrace } from '../utils/trace';
 
-const VALID_NODES = ['A', 'B', 'DRONE'];
 const VALID_TYPES = ['MSG', 'ACK', 'HEARTBEAT', 'PING', 'STATUS'];
 const ESP_USB_BRIDGE_IDS = new Set(['303a', '10c4', '1a86', '0403', '067b']);
 
@@ -12,11 +11,16 @@ const ESP_USB_BRIDGE_IDS = new Set(['303a', '10c4', '1a86', '0403', '067b']);
  * Maps a callsign such as "TEAM_A", "A", "Node B" or "DRONE RELAY" to A, B or DRONE.
  * Matches whole tokens only, so "TEAM_B" can never be mistaken for Team A.
  */
-export function nodeFromName(raw: unknown): 'A' | 'B' | 'DRONE' | null {
-  const tokens = String(raw ?? '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
-  if (tokens.some((t) => t === 'DRONE' || t === 'RELAY' || t === 'REPEATER')) return 'DRONE';
+export function nodeFromName(raw: unknown): string | null {
+  const value = String(raw ?? '').trim().toUpperCase();
+  if (!value) return null;
+  const tokens = value.split(/[^A-Z0-9]+/).filter(Boolean);
+  if (tokens.some((token) => token === 'DRONE' || token === 'RELAY' || token === 'REPEATER')) return 'DRONE';
   const last = tokens[tokens.length - 1];
-  return last === 'A' || last === 'B' ? last : null;
+  if (last === 'A' || last === 'B') return last;
+  if (tokens[0] === 'TEAM' && tokens.length > 1) return tokens.slice(1).join('_').slice(0, 15);
+  const normalized = value.replace(/[^A-Z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  return /^[A-Z0-9_-]{1,15}$/.test(normalized) ? normalized : null;
 }
 
 export class SerialService extends EventEmitter {
@@ -38,7 +42,7 @@ export class SerialService extends EventEmitter {
   private _currentBlockType: string = 'NONE';
   private _pendingOutboxMap = new Map<number, { packet: any; sentAt: number }>();
 
-  public verifiedNodeId: 'A' | 'B' | 'DRONE' | null = null;
+  public verifiedNodeId: string | null = null;
   private autoDetectTimer: any = null;
   private probeTimer: any = null;
   private autoDetectInProgress = false;
@@ -491,18 +495,12 @@ export class SerialService extends EventEmitter {
     if (!p || typeof p !== 'object') return false;
     if (!VALID_TYPES.includes(p.type)) return false;
 
-    // Normalize callsigns from firmware: "TEAM_A" -> "A", "TEAM_B" -> "B"
-    if (p.from) {
-      const fromStr = String(p.from).toUpperCase();
-      p.from = fromStr.endsWith('_A') || fromStr === 'A' ? 'A' : fromStr.endsWith('_B') || fromStr === 'B' ? 'B' : fromStr;
-    }
-    if (p.to) {
-      const toStr = String(p.to).toUpperCase();
-      p.to = toStr.endsWith('_A') || toStr === 'A' ? 'A' : toStr.endsWith('_B') || toStr === 'B' ? 'B' : toStr;
-    }
+    // Normalize known team callsigns while retaining validated IDs for new nodes.
+    if (p.from) p.from = nodeFromName(p.from);
+    if (p.to && p.to !== 'BROADCAST') p.to = nodeFromName(p.to);
 
-    if (p.from && !VALID_NODES.includes(p.from)) return false;
-    if (p.to && !VALID_NODES.includes(p.to) && p.to !== 'BROADCAST') return false;
+    if (p.from && !nodeFromName(p.from)) return false;
+    if (p.to && p.to !== 'BROADCAST' && !nodeFromName(p.to)) return false;
     if (p.type === 'MSG') {
       if (typeof p.msgID !== 'number') return false;
       if (typeof p.payload !== 'string' || p.payload.length === 0) return false;

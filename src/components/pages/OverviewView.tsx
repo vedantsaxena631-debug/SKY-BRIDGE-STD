@@ -21,7 +21,7 @@ export const OverviewView: React.FC = () => {
   const acknowledgedCount = messages.filter((m) => m.status === 'ACKNOWLEDGED').length;
   const criticalCount = messages.filter((m) => m.priority === 'CRITICAL').length;
   const activeNodes = devices.filter((d) => d.status === 'ONLINE').length;
-  const allNodesOnline = devices.length === 3 && activeNodes === 3;
+  const allNodesOnline = devices.length > 0 && activeNodes === devices.length;
 
   return (
     <div className="space-y-6">
@@ -37,7 +37,7 @@ export const OverviewView: React.FC = () => {
             </h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Drone-mounted SX1278 repeater bridging Team A (Base) and Team B (Search Sector).
+            Live status for all registered LoRa nodes, including ground stations and the drone alert node.
           </p>
         </div>
 
@@ -94,15 +94,35 @@ export const OverviewView: React.FC = () => {
             <span className="text-xs font-mono">LORA NODES</span>
             <Radio className="w-4 h-4 text-purple-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-slate-100">{activeNodes} / 3</div>
+          <div className="text-2xl font-bold font-mono text-slate-100">{activeNodes} / {devices.length}</div>
           <div className="text-[11px] text-slate-400 mt-1">
-            {activeNodes} of 3 nodes online
+            {activeNodes} of {devices.length} detected nodes online
           </div>
         </div>
       </div>
 
       {/* Network Topology Component (Core Visualizer) */}
       <NetworkTopology />
+
+      <section className="bg-slate-900/80 border border-slate-800 rounded-xl p-5">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-sm font-semibold text-slate-200 font-mono">REGISTERED NETWORK NODES</h2>
+          <span className="text-xs text-slate-400 font-mono">{devices.length} total</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {devices.map((device) => (
+            <div key={device.id} className="rounded-lg border border-slate-800 bg-slate-950/70 p-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-slate-100 truncate">{device.name}</div>
+                <div className="text-[10px] text-slate-500 font-mono truncate">{device.id} · {device.role}</div>
+              </div>
+              <span className={`shrink-0 text-[10px] font-mono ${device.status === 'ONLINE' ? 'text-emerald-400' : device.status === 'OFFLINE' ? 'text-rose-400' : 'text-slate-400'}`}>
+                {device.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
 
       {/* Recent Activity Feed & Live Quick Send */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

@@ -1,4 +1,5 @@
-export type NodeId = 'TEAM_A' | 'DRONE_RELAY' | 'TEAM_B';
+// Device identities are discovered at runtime; built-in IDs remain well-known aliases.
+export type NodeId = string;
 
 export type MessageStatus = 
   | 'QUEUED'

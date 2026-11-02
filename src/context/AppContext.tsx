@@ -81,6 +81,21 @@ const mapBackendNode = (node: unknown, fallback: NodeId): NodeId => {
   return typeof node === 'string' ? (node as NodeId) : fallback;
 };
 
+const backendDeviceId = (id: string): string => {
+  if (id === 'A') return 'TEAM_A';
+  if (id === 'B') return 'TEAM_B';
+  if (id === 'DRONE') return 'DRONE_RELAY';
+  return id;
+};
+
+const backendStatusToDeviceStatus = (status: unknown): DeviceNode['status'] => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'online') return 'ONLINE';
+  if (normalized === 'standby') return 'STANDBY';
+  if (normalized === 'offline') return 'OFFLINE';
+  return 'UNKNOWN';
+};
+
 const mapBackendStatus = (status: unknown, fallback: Message['status'] = 'QUEUED'): Message['status'] => {
   const normalized = String(status || '').toLowerCase();
   if (normalized === 'sent_to_bridge') return 'SENT_TO_BRIDGE';
@@ -282,26 +297,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         if (statusRes.status === 'fulfilled' && statusRes.value?.nodes) {
-          const nodes = statusRes.value.nodes;
-          setDevices((prev) => prev.map((device) => {
-            const nodeId = device.id === 'TEAM_A' ? 'A' : device.id === 'TEAM_B' ? 'B' : 'DRONE';
-            const node = nodes[nodeId];
-            const reportedStatus = String(node?.status || 'unknown').toLowerCase();
-            const status: DeviceNode['status'] =
-              reportedStatus === 'online'
-                ? 'ONLINE'
-                : reportedStatus === 'standby'
-                ? 'STANDBY'
-                : reportedStatus === 'offline'
-                ? 'OFFLINE'
-                : 'UNKNOWN';
+          const nodes = statusRes.value.nodes as Record<string, any>;
+          setDevices((prev) => {
+            const previousById = new Map<string, DeviceNode>(
+              prev.map((device) => [device.id, device] as [string, DeviceNode])
+            );
+            return Object.entries(nodes).map(([rawId, node]) => {
+              const backendId = rawId.trim().toUpperCase();
+              const id = backendDeviceId(backendId);
+              const previous = previousById.get(id);
+              const isDrone = backendId === 'DRONE' || previous?.type === 'AERIAL_RELAY';
+              const role = typeof node?.role === 'string' && node.role
+                ? node.role
+                : previous?.role || (isDrone ? 'Drone LoRa node' : `LoRa node ${backendId}`);
+              const lastSeen = node?.lastSeen
+                ? new Date(node.lastSeen).toLocaleTimeString()
+                : 'Never';
 
-            return {
-              ...device,
-              status,
-              lastSeen: node?.lastSeen ? new Date(node.lastSeen).toLocaleTimeString() : 'Never',
-            };
-          }));
+              return {
+                ...(previous || {
+                  id,
+                  name: isDrone ? 'Drone Main Node' : `LoRa Node ${backendId}`,
+                  role,
+                  type: isDrone ? 'AERIAL_RELAY' as const : 'GROUND_NODE' as const,
+                  hardware: {
+                    mcu: 'ESP32',
+                    loraModule: 'SX1278 LoRa',
+                    frequency: 'Not reported',
+                    antenna: 'Not reported',
+                    powerSource: 'Not reported',
+                  },
+                  uptimePercent: 0,
+                  heartbeatsCount: 0,
+                  firmwareVersion: 'Not provided by hardware',
+                }),
+                id,
+                name: previous?.name || (isDrone ? 'Drone Main Node' : `LoRa Node ${backendId}`),
+                role,
+                type: isDrone ? 'AERIAL_RELAY' : previous?.type || 'GROUND_NODE',
+                status: backendStatusToDeviceStatus(node?.status),
+                lastSeen,
+              };
+            });
+          });
         }
       } catch (err) {}
     };
