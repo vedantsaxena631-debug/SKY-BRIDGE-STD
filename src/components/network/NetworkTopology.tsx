@@ -32,8 +32,10 @@ export const NetworkTopology: React.FC = () => {
   const teamAStatus = getNodeStatusPresentation(teamA?.status);
   const droneStatus = getNodeStatusPresentation(drone?.status);
   const teamBStatus = getNodeStatusPresentation(teamB?.status);
-  const onlineNodeCount = [teamA, drone, teamB].filter((device) => device?.status === 'ONLINE').length;
-  const allNodesOnline = onlineNodeCount === 3;
+  const coreNodeIds = new Set(['TEAM_A', 'DRONE', 'DRONE_RELAY', 'TEAM_B']);
+  const additionalNodes = devices.filter((device) => !coreNodeIds.has(device.id));
+  const onlineNodeCount = devices.filter((device) => device.status === 'ONLINE').length;
+  const allNodesOnline = devices.length > 0 && onlineNodeCount === devices.length;
 
   const tokens = theme === 'dark' ? colorTokens.dark : colorTokens.light;
   const isLight = theme === 'light';
@@ -103,10 +105,10 @@ export const NetworkTopology: React.FC = () => {
                 {mode === 'DEMO'
                   ? allNodesOnline
                     ? 'Carrier Standby — 433.000 MHz Clear (simulated)'
-                    : `${onlineNodeCount} of 3 simulated nodes online`
+                    : `${onlineNodeCount} of ${devices.length} simulated nodes online`
                   : allNodesOnline
-                  ? `${onlineNodeCount} of 3 nodes online — carrier quality not reported`
-                  : `${onlineNodeCount} of 3 nodes online — awaiting live telemetry`}
+                  ? `${onlineNodeCount} of ${devices.length} nodes online — carrier quality not reported`
+                  : `${onlineNodeCount} of ${devices.length} nodes online — awaiting live telemetry`}
               </span>
             </div>
           )}
@@ -182,12 +184,36 @@ export const NetworkTopology: React.FC = () => {
             </div>
             <span className={`${teamBStatus.textClass} font-mono text-xs font-bold`}>STATUS: {teamBStatus.label}</span>
           </div>
+
+          {additionalNodes.map((device) => {
+            const status = getNodeStatusPresentation(device.status);
+            return (
+              <div
+                key={device.id}
+                className={`p-3 rounded-lg border flex justify-between items-center text-sm ${
+                  flashingNode?.nodeId === device.id
+                    ? 'border-cyan-500 bg-cyan-500/10'
+                    : isLight
+                    ? 'bg-[#F3F5F8] border-[#DDE3EA]'
+                    : 'bg-[#171D27] border-[#232B36]'
+                }`}
+              >
+                <div>
+                  <span className={`font-semibold ${isLight ? 'text-[#0B1220]' : 'text-slate-200'}`}>
+                    {device.name || device.id}
+                  </span>
+                  <p className="text-xs text-slate-500 font-mono">{device.id} · {device.role}</p>
+                </div>
+                <span className={`${status.textClass} font-mono text-xs font-bold`}>STATUS: {status.label}</span>
+              </div>
+            );
+          })}
         </div>
       ) : (
         /* Visual Topology with Curved SVG Paths and Packet Animations */
         <div className="relative py-6 px-2 sm:px-6 select-none">
           {/* SVG Overlay for Connection Paths and In-flight Packet markers */}
-          <div className="hidden md:block absolute inset-0 pointer-events-none z-0">
+          <div className="hidden md:block absolute top-6 left-0 right-0 h-[240px] pointer-events-none z-0">
             <svg
               className="w-full h-full"
               viewBox="0 0 1000 240"
@@ -452,6 +478,49 @@ export const NetworkTopology: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {additionalNodes.length > 0 && (
+            <div className="mt-6 relative z-10">
+              <h4 className={`text-xs font-mono font-bold uppercase tracking-wider mb-3 ${isLight ? 'text-[#6B7686]' : 'text-slate-400'}`}>
+                Additional LoRa Nodes ({additionalNodes.length})
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {additionalNodes.map((device) => {
+                  const status = getNodeStatusPresentation(device.status);
+                  return (
+                    <div
+                      key={device.id}
+                      className={`p-4 rounded-xl border transition-all duration-200 ${
+                        flashingNode?.nodeId === device.id
+                          ? 'border-cyan-500 ring-2 ring-cyan-500/30'
+                          : isLight
+                          ? 'bg-white border-[#DDE3EA] shadow-[0_1px_3px_0_rgba(0,0,0,0.06)]'
+                          : 'bg-[#171D27] border-[#232B36]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${isLight ? 'bg-slate-100 text-slate-800' : 'bg-slate-800 text-slate-300'}`}>
+                          {device.id}
+                        </span>
+                        <span className={`flex items-center gap-1.5 text-xs font-mono ${status.textClass}`}>
+                          <span className={`w-2 h-2 rounded-full ${status.dotClass}`} />
+                          {status.label}
+                        </span>
+                      </div>
+                      <h4 className={`text-sm font-bold mb-1 ${isLight ? 'text-[#0B1220]' : 'text-slate-100'}`}>
+                        {device.name || device.id}
+                      </h4>
+                      <p className="text-xs text-slate-400 mb-3">{device.role || 'LoRa network node'}</p>
+                      <div className={`text-[11px] font-mono flex justify-between p-2 rounded border ${isLight ? 'bg-[#F3F5F8] border-[#EDEFF2] text-[#3F4A5C]' : 'bg-[#12171F] border-[#232B36] text-slate-400'}`}>
+                        <span>Heartbeats:</span>
+                        <span className="font-semibold">{device.heartbeatsCount ?? 0}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
